@@ -18,7 +18,12 @@ let package = Package(
     targets: [
         .target(name: "CoreHardware"),
         .target(name: "CoreInference"),
-        .target(name: "CoreStorage"),
+        .target(
+            name: "CoreStorage",
+            linkerSettings: [
+                .linkedLibrary("sqlite3")
+            ]
+        ),
         .target(name: "CoreInstaller", dependencies: ["CoreHardware"]),
         .target(name: "CoreAgents"),
         .target(name: "DesignSystem"),
