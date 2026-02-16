@@ -1,0 +1,37 @@
+{
+  "averageFirstTokenLatencyMS" : 0.060097000000000005,
+  "averageTokensPerSecond" : 36.99029109661236,
+  "baseURL" : "http:\/\/127.0.0.1:11434",
+  "clientKind" : "mock",
+  "createdAt" : "2026-02-16T21:08:23Z",
+  "label" : "Ross’s Mac mini",
+  "model" : "qwen2.5:7b-instruct-q4_K_M",
+  "peakResidentMemoryMB" : 6.875,
+  "prompt" : "Explain what Bzzbe does in two short sentences.",
+  "samples" : [
+    {
+      "firstTokenLatencyMS" : 0.116416,
+      "peakResidentMemoryMB" : 6.78125,
+      "run" : 1,
+      "tokenCount" : 11,
+      "tokensPerSecond" : 37.18663913669906,
+      "totalDurationMS" : 295.921583
+    },
+    {
+      "firstTokenLatencyMS" : 0.027208,
+      "peakResidentMemoryMB" : 6.8125,
+      "run" : 2,
+      "tokenCount" : 11,
+      "tokensPerSecond" : 36.84695575057459,
+      "totalDurationMS" : 298.559333
+    },
+    {
+      "firstTokenLatencyMS" : 0.036667,
+      "peakResidentMemoryMB" : 6.875,
+      "run" : 3,
+      "tokenCount" : 11,
+      "tokensPerSecond" : 36.93727840256345,
+      "totalDurationMS" : 297.838792
+    }
+  ]
+}

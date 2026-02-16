@@ -13,7 +13,8 @@ let package = Package(
         .library(name: "CoreInstaller", targets: ["CoreInstaller"]),
         .library(name: "CoreAgents", targets: ["CoreAgents"]),
         .library(name: "DesignSystem", targets: ["DesignSystem"]),
-        .executable(name: "BzzbeApp", targets: ["BzzbeApp"])
+        .executable(name: "BzzbeApp", targets: ["BzzbeApp"]),
+        .executable(name: "BzzbePerfHarness", targets: ["BzzbePerfHarness"])
     ],
     targets: [
         .target(name: "CoreHardware"),
@@ -27,6 +28,12 @@ let package = Package(
         .target(name: "CoreInstaller", dependencies: ["CoreHardware"]),
         .target(name: "CoreAgents"),
         .target(name: "DesignSystem"),
+        .executableTarget(
+            name: "BzzbePerfHarness",
+            dependencies: [
+                "CoreInference"
+            ]
+        ),
         .executableTarget(
             name: "BzzbeApp",
             dependencies: [
