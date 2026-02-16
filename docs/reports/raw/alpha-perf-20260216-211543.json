@@ -1,0 +1,57 @@
+{
+  "averageFirstTokenLatencyMS" : 0.08605566666666668,
+  "averageTokensPerSecond" : 34.80266896452347,
+  "baseURL" : "http:\/\/127.0.0.1:11434",
+  "clientKind" : "mock",
+  "createdAt" : "2026-02-16T21:15:45Z",
+  "hostProfile" : {
+    "architecture" : "arm64",
+    "hostName" : "Ross’s Mac mini",
+    "logicalCPUCount" : 12,
+    "macOSVersion" : "Version 26.3 (Build 25D125)",
+    "physicalMemoryGB" : 24
+  },
+  "label" : "Ross’s Mac mini",
+  "model" : "qwen2.5:7b-instruct-q4_K_M",
+  "peakCombinedResidentMemoryMB" : 8.234375,
+  "peakHarnessResidentMemoryMB" : 8.234375,
+  "peakResidentMemoryMB" : 8.234375,
+  "peakRuntimeResidentMemoryMB" : 0,
+  "prompt" : "Explain what Bzzbe does in two short sentences.",
+  "runtimeProcessName" : "ollama",
+  "samples" : [
+    {
+      "firstTokenLatencyMS" : 0.143459,
+      "peakCombinedResidentMemoryMB" : 8.21875,
+      "peakHarnessResidentMemoryMB" : 8.21875,
+      "peakResidentMemoryMB" : 8.21875,
+      "peakRuntimeResidentMemoryMB" : 0,
+      "run" : 1,
+      "tokenCount" : 11,
+      "tokensPerSecond" : 34.9469329869495,
+      "totalDurationMS" : 314.906417
+    },
+    {
+      "firstTokenLatencyMS" : 0.055542,
+      "peakCombinedResidentMemoryMB" : 8.21875,
+      "peakHarnessResidentMemoryMB" : 8.21875,
+      "peakResidentMemoryMB" : 8.21875,
+      "peakRuntimeResidentMemoryMB" : 0,
+      "run" : 2,
+      "tokenCount" : 11,
+      "tokensPerSecond" : 34.97810817194272,
+      "totalDurationMS" : 314.537959
+    },
+    {
+      "firstTokenLatencyMS" : 0.059166,
+      "peakCombinedResidentMemoryMB" : 8.234375,
+      "peakHarnessResidentMemoryMB" : 8.234375,
+      "peakResidentMemoryMB" : 8.234375,
+      "peakRuntimeResidentMemoryMB" : 0,
+      "run" : 3,
+      "tokenCount" : 11,
+      "tokensPerSecond" : 34.4829657346782,
+      "totalDurationMS" : 319.05725
+    }
+  ]
+}
