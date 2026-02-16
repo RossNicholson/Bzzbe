@@ -5,6 +5,7 @@ import SwiftUI
 
 struct AppShellView: View {
     @State private var appState = AppState()
+    @AppStorage("hasCompletedInitialSetup") private var hasCompletedInitialSetup = false
 
     var body: some View {
         NavigationSplitView {
@@ -15,7 +16,11 @@ struct AppShellView: View {
             }
             .navigationTitle("Bzzbe")
         } detail: {
-            RouteDetailView(route: appState.selectedRoute, capabilityProfile: appState.capabilityProfile)
+            RouteDetailView(
+                route: appState.selectedRoute,
+                capabilityProfile: appState.capabilityProfile,
+                onRequestSetupRerun: { hasCompletedInitialSetup = false }
+            )
         }
     }
 
@@ -39,11 +44,12 @@ struct AppShellView: View {
 private struct RouteDetailView: View {
     let route: AppState.Route
     let capabilityProfile: CapabilityProfile
+    let onRequestSetupRerun: () -> Void
 
     var body: some View {
         switch route {
         case .chat:
-            ChatView()
+            ChatView(onRequestSetupRerun: onRequestSetupRerun)
         case .tasks, .models:
             RoutePlaceholderView(
                 title: route.title,

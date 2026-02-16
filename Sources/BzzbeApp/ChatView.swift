@@ -23,11 +23,23 @@ final class ChatViewModel: ObservableObject {
         }
     }
 
+    struct RecoveryHint: Equatable {
+        enum Action: Equatable {
+            case retryLastPrompt
+            case rerunSetup
+        }
+
+        let message: String
+        let actionTitle: String
+        let action: Action
+    }
+
     @Published var draft: String = ""
     @Published private(set) var conversations: [Conversation] = []
     @Published private(set) var messages: [Message] = []
     @Published private(set) var isStreaming: Bool = false
     @Published private(set) var errorMessage: String?
+    @Published private(set) var recoveryHint: RecoveryHint?
     @Published private(set) var lastPrompt: String?
     @Published private(set) var activeConversationID: String?
 
@@ -35,6 +47,7 @@ final class ChatViewModel: ObservableObject {
 
     private let inferenceClient: any InferenceClient
     private let conversationStore: any ConversationStoring
+    private let onRequestSetupRerun: () -> Void
     private var streamTask: Task<Void, Never>?
     private var assistantMessageID: UUID?
     private var activeRequestID: UUID?
@@ -43,6 +56,7 @@ final class ChatViewModel: ObservableObject {
     init(
         inferenceClient: any InferenceClient = LocalRuntimeInferenceClient(),
         conversationStore: any ConversationStoring = ChatViewModel.defaultConversationStore(),
+        onRequestSetupRerun: @escaping () -> Void = {},
         model: InferenceModelDescriptor = InferenceModelDescriptor(
             identifier: "qwen2.5:7b-instruct-q4_K_M",
             displayName: "Qwen 2.5 7B Instruct",
@@ -51,6 +65,7 @@ final class ChatViewModel: ObservableObject {
     ) {
         self.inferenceClient = inferenceClient
         self.conversationStore = conversationStore
+        self.onRequestSetupRerun = onRequestSetupRerun
         self.model = model
 
         Task {
@@ -115,6 +130,17 @@ final class ChatViewModel: ObservableObject {
         conversationIDByRequestID.removeAll()
         lastPrompt = nil
         errorMessage = nil
+        recoveryHint = nil
+    }
+
+    func performRecoveryAction() {
+        guard let recoveryHint else { return }
+        switch recoveryHint.action {
+        case .retryLastPrompt:
+            retryLastPrompt()
+        case .rerunSetup:
+            onRequestSetupRerun()
+        }
     }
 
     func selectConversation(id: String) {
@@ -147,6 +173,7 @@ final class ChatViewModel: ObservableObject {
         guard !isStreaming else { return }
 
         errorMessage = nil
+        recoveryHint = nil
         lastPrompt = prompt
         messages.append(.init(role: .user, content: prompt))
 
@@ -222,7 +249,7 @@ final class ChatViewModel: ObservableObject {
 
     private func failStreaming(error: Error, requestID: UUID) {
         guard isActiveRequest(requestID) else { return }
-        errorMessage = "Generation failed. \(error.localizedDescription)"
+        applyRecoveryState(for: error)
         finishStreamingIfNeeded(for: requestID)
     }
 
@@ -352,6 +379,60 @@ final class ChatViewModel: ObservableObject {
         messages.reversed().first(where: { $0.role == .user })?.content
     }
 
+    private func applyRecoveryState(for error: Error) {
+        if let runtimeError = error as? LocalRuntimeInferenceError {
+            switch runtimeError {
+            case .unavailable:
+                errorMessage = runtimeError.localizedDescription
+                recoveryHint = RecoveryHint(
+                    message: "Start your local runtime, then retry this prompt.",
+                    actionTitle: "Retry Request",
+                    action: .retryLastPrompt
+                )
+                return
+            case let .runtime(details):
+                if isMissingModelError(details) {
+                    errorMessage = "The selected model is missing from the local runtime."
+                    recoveryHint = RecoveryHint(
+                        message: "Re-run setup to reinstall the recommended model profile.",
+                        actionTitle: "Run Setup Again",
+                        action: .rerunSetup
+                    )
+                } else {
+                    errorMessage = runtimeError.localizedDescription
+                    recoveryHint = RecoveryHint(
+                        message: "Retry the request. If this repeats, restart the local runtime.",
+                        actionTitle: "Retry Request",
+                        action: .retryLastPrompt
+                    )
+                }
+                return
+            case .invalidResponseStatus, .invalidResponse:
+                errorMessage = runtimeError.localizedDescription
+                recoveryHint = RecoveryHint(
+                    message: "Retry the request. If this repeats, restart the local runtime.",
+                    actionTitle: "Retry Request",
+                    action: .retryLastPrompt
+                )
+                return
+            }
+        }
+
+        errorMessage = "Generation failed. \(error.localizedDescription)"
+        recoveryHint = RecoveryHint(
+            message: "Retry the request. If this repeats, restart Bzzbe and the local runtime.",
+            actionTitle: "Retry Request",
+            action: .retryLastPrompt
+        )
+    }
+
+    private func isMissingModelError(_ details: String) -> Bool {
+        let normalized = details.lowercased()
+        return normalized.contains("not found")
+            || normalized.contains("no such model")
+            || normalized.contains("unknown model")
+    }
+
     private static func defaultConversationStore() -> any ConversationStoring {
         if let sqliteStore = try? SQLiteConversationStore.defaultStore() {
             return sqliteStore
@@ -361,7 +442,13 @@ final class ChatViewModel: ObservableObject {
 }
 
 struct ChatView: View {
-    @StateObject private var viewModel = ChatViewModel()
+    @StateObject private var viewModel: ChatViewModel
+
+    init(onRequestSetupRerun: @escaping () -> Void = {}) {
+        _viewModel = StateObject(
+            wrappedValue: ChatViewModel(onRequestSetupRerun: onRequestSetupRerun)
+        )
+    }
 
     var body: some View {
         HSplitView {
@@ -426,15 +513,35 @@ struct ChatView: View {
             header
             Divider()
             messageList
-            if let errorMessage = viewModel.errorMessage {
+            recoverySection
+            composer
+        }
+        .padding(20)
+    }
+
+    @ViewBuilder
+    private var recoverySection: some View {
+        if let errorMessage = viewModel.errorMessage {
+            VStack(alignment: .leading, spacing: 8) {
                 Text(errorMessage)
                     .font(.footnote)
                     .foregroundStyle(.red)
                     .frame(maxWidth: .infinity, alignment: .leading)
+
+                if let recoveryHint = viewModel.recoveryHint {
+                    Text(recoveryHint.message)
+                        .font(.footnote)
+                        .foregroundStyle(.secondary)
+                        .frame(maxWidth: .infinity, alignment: .leading)
+
+                    Button(recoveryHint.actionTitle) {
+                        viewModel.performRecoveryAction()
+                    }
+                    .buttonStyle(.bordered)
+                    .disabled(viewModel.isStreaming)
+                }
             }
-            composer
         }
-        .padding(20)
     }
 
     private var selectedConversationBinding: Binding<String?> {
