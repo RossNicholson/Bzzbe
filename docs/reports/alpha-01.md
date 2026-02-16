@@ -8,6 +8,7 @@ _Generated: 2026-02-16_
 - Target environments: two Apple Silicon tiers.
 - Harness: `swift run BzzbePerfHarness` (added in JOB-016) via `scripts/run-alpha-perf.sh`.
 - Memory sampling mode: harness RSS + runtime-process RSS (`--runtime-process`, default `ollama`).
+- Execution runbook: `docs/reports/ALPHA_PERF_RUNBOOK.md`.
 
 ## Environment + Commands
 
