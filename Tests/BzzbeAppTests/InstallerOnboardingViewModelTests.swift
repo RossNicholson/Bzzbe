@@ -118,6 +118,10 @@ func installerOnboardingCompletesAfterRuntimePull() async throws {
         profile: profile,
         installerService: service,
         runtimeModelPuller: puller,
+        runtimeBootstrapper: StubRuntimeBootstrapper(
+            isInitiallyReachable: true,
+            startIfInstalledResult: true
+        ),
         runtimeClient: runtimeClient,
         installedModelStore: installedModelStore,
         actionLogStore: actionLogStore
@@ -166,6 +170,10 @@ func installerOnboardingFailsWhenRuntimePullUnavailable() async throws {
         profile: profile,
         installerService: service,
         runtimeModelPuller: puller,
+        runtimeBootstrapper: StubRuntimeBootstrapper(
+            isInitiallyReachable: true,
+            startIfInstalledResult: true
+        ),
         runtimeClient: StubInferenceClient(),
         installedModelStore: InMemoryInstalledModelStore(),
         actionLogStore: InMemoryInstallerActionLogStore()
@@ -243,6 +251,10 @@ func installerOnboardingInstallsProviderArtifact() async throws {
         runtimeModelImporter: importer,
         artifactDownloader: downloader,
         artifactVerifier: verifier,
+        runtimeBootstrapper: StubRuntimeBootstrapper(
+            isInitiallyReachable: true,
+            startIfInstalledResult: true
+        ),
         runtimeClient: runtimeClient,
         installedModelStore: installedModelStore,
         actionLogStore: actionLogStore,
@@ -260,6 +272,62 @@ func installerOnboardingInstallsProviderArtifact() async throws {
     #expect(installedModelStore.savedRecord?.modelID == candidate.id)
     #expect(installedModelStore.savedRecord?.checksumSHA256 == "provider-sha256")
     #expect(installedModelStore.savedRecord?.artifactPath.contains(providerDirectory.path) == true)
+}
+
+@MainActor
+@Test("InstallerOnboardingViewModel exposes in-app runtime recovery actions")
+func installerOnboardingShowsRuntimeRecoveryAndRecovers() async throws {
+    let candidate = ModelCandidate(
+        id: "qwen3:8b",
+        displayName: "Qwen 3 8B",
+        approximateDownloadSizeGB: 5.2,
+        minimumMemoryGB: 16,
+        tier: .balanced
+    )
+    let recommendation = InstallRecommendation(
+        status: .ready,
+        tier: candidate.tier.rawValue,
+        candidate: candidate,
+        rationale: "Best fit for detected hardware."
+    )
+    let service = StubInstallerService(
+        recommendation: recommendation,
+        candidates: [candidate]
+    )
+    let bootstrapper = StubRuntimeBootstrapper(
+        isInitiallyReachable: false,
+        startIfInstalledResult: false
+    )
+    let puller = StubRuntimeModelPuller(
+        events: [
+            .started(modelID: candidate.id),
+            .completed
+        ]
+    )
+    let viewModel = InstallerOnboardingViewModel(
+        profile: CapabilityProfile(architecture: "arm64", memoryGB: 16, freeDiskGB: 80, performanceCores: 8),
+        installerService: service,
+        runtimeModelPuller: puller,
+        runtimeBootstrapper: bootstrapper,
+        runtimeClient: StubInferenceClient(),
+        installedModelStore: InMemoryInstalledModelStore(),
+        actionLogStore: InMemoryInstallerActionLogStore()
+    )
+
+    viewModel.startInstall()
+    try await eventually {
+        if case .failed = viewModel.step {
+            return true
+        }
+        return false
+    }
+
+    #expect(viewModel.isRuntimeRecoveryVisible == true)
+
+    viewModel.installRuntimeInApp()
+    try await eventually {
+        viewModel.runtimeBootstrapStatusMessage?.contains("running") == true
+    }
 }
 
 private struct StubInstallerService: Installing {
@@ -327,6 +395,34 @@ private actor StubRuntimeModelImporter: RuntimeModelImporting {
     }
 
     func cancelCurrentImport() async {}
+}
+
+private actor StubRuntimeBootstrapper: RuntimeBootstrapping {
+    private var reachable: Bool
+    private let startIfInstalledResult: Bool
+
+    init(
+        isInitiallyReachable: Bool,
+        startIfInstalledResult: Bool
+    ) {
+        self.reachable = isInitiallyReachable
+        self.startIfInstalledResult = startIfInstalledResult
+    }
+
+    func isRuntimeReachable() async -> Bool {
+        reachable
+    }
+
+    func startRuntimeIfInstalled() async -> Bool {
+        if startIfInstalledResult {
+            reachable = true
+        }
+        return startIfInstalledResult
+    }
+
+    func installAndStartRuntime() async throws {
+        reachable = true
+    }
 }
 
 private final class StubArtifactDownloader: ArtifactDownloading {

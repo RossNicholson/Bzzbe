@@ -23,6 +23,9 @@ final class InstallerOnboardingViewModel: ObservableObject {
     @Published private(set) var progress: Double = 0
     @Published private(set) var statusText: String = "Ready to start setup."
     @Published private(set) var isInstalling: Bool = false
+    @Published private(set) var isRuntimeRecoveryVisible: Bool = false
+    @Published private(set) var isRuntimeBootstrapInProgress: Bool = false
+    @Published private(set) var runtimeBootstrapStatusMessage: String?
 
     let profile: CapabilityProfile
 
@@ -40,6 +43,7 @@ final class InstallerOnboardingViewModel: ObservableObject {
     private let runtimeModelImporter: RuntimeModelImporting
     private let artifactDownloader: ArtifactDownloading
     private let artifactVerifier: ArtifactVerifying
+    private let runtimeBootstrapper: RuntimeBootstrapping
     private let runtimeClient: any InferenceClient
     private let installedModelStore: InstalledModelStoring
     private let actionLogStore: InstallerActionLogging
@@ -55,6 +59,7 @@ final class InstallerOnboardingViewModel: ObservableObject {
         runtimeModelImporter: RuntimeModelImporting = OllamaModelImportClient(),
         artifactDownloader: ArtifactDownloading = ResumableArtifactDownloadManager(),
         artifactVerifier: ArtifactVerifying = ArtifactVerifier(),
+        runtimeBootstrapper: RuntimeBootstrapping = OllamaRuntimeBootstrapper(),
         runtimeClient: any InferenceClient = LocalRuntimeInferenceClient(),
         installedModelStore: InstalledModelStoring = JSONInstalledModelStore.defaultStore(),
         actionLogStore: InstallerActionLogging = JSONInstallerActionLogStore.defaultStore(),
@@ -67,6 +72,7 @@ final class InstallerOnboardingViewModel: ObservableObject {
         self.runtimeModelImporter = runtimeModelImporter
         self.artifactDownloader = artifactDownloader
         self.artifactVerifier = artifactVerifier
+        self.runtimeBootstrapper = runtimeBootstrapper
         self.runtimeClient = runtimeClient
         self.installedModelStore = installedModelStore
         self.actionLogStore = actionLogStore
@@ -118,6 +124,8 @@ final class InstallerOnboardingViewModel: ObservableObject {
             return
         }
 
+        isRuntimeRecoveryVisible = false
+        runtimeBootstrapStatusMessage = nil
         installTask?.cancel()
         installTask = Task { [weak self] in
             await self?.performInstallFlow(candidate: candidate)
@@ -141,6 +149,46 @@ final class InstallerOnboardingViewModel: ObservableObject {
         }
     }
 
+    func startRuntimeFromApp() {
+        guard !isRuntimeBootstrapInProgress else { return }
+        isRuntimeBootstrapInProgress = true
+        runtimeBootstrapStatusMessage = "Starting local runtime..."
+
+        Task { [weak self] in
+            guard let self else { return }
+            let started = await self.runtimeBootstrapper.startRuntimeIfInstalled()
+            if started {
+                self.runtimeBootstrapStatusMessage = "Runtime is running. Press Retry to continue setup."
+                self.isRuntimeRecoveryVisible = false
+            } else {
+                self.runtimeBootstrapStatusMessage = "Runtime app was not found or failed to start."
+                self.isRuntimeRecoveryVisible = true
+            }
+            self.isRuntimeBootstrapInProgress = false
+        }
+    }
+
+    func installRuntimeInApp() {
+        guard !isRuntimeBootstrapInProgress else { return }
+        isRuntimeBootstrapInProgress = true
+        runtimeBootstrapStatusMessage = "Installing local runtime..."
+
+        Task { [weak self] in
+            guard let self else { return }
+            do {
+                try await self.runtimeBootstrapper.installAndStartRuntime()
+                self.runtimeBootstrapStatusMessage = "Runtime installed and running. Press Retry to continue setup."
+                self.isRuntimeRecoveryVisible = false
+                self.logAction(category: "runtime.bootstrap.completed", message: "Installed and started runtime from app.")
+            } catch {
+                self.runtimeBootstrapStatusMessage = "Runtime setup failed: \(error.localizedDescription)"
+                self.isRuntimeRecoveryVisible = true
+                self.logAction(category: "runtime.bootstrap.failed", message: error.localizedDescription)
+            }
+            self.isRuntimeBootstrapInProgress = false
+        }
+    }
+
     func retryInstall() {
         startInstall()
     }
@@ -156,6 +204,7 @@ final class InstallerOnboardingViewModel: ObservableObject {
                 category: "install.started",
                 message: "Starting install for \(candidate.id) (\(candidate.tier.rawValue))."
             )
+            try await ensureRuntimeReadyForInstall()
             let installedArtifactMetadata = try await installCandidateArtifact(candidate)
 
             statusText = "Verifying local runtime and model availability..."
@@ -192,10 +241,18 @@ final class InstallerOnboardingViewModel: ObservableObject {
             statusText = "Setup cancelled."
             installTask = nil
             activeProviderDownloadID = nil
+            isRuntimeRecoveryVisible = false
             logAction(category: "install.cancelled", message: "Install was cancelled by the user.")
         } catch {
             isInstalling = false
-            step = .failed(message: "Setup failed: \(error.localizedDescription)")
+            if let installationFlowError = error as? InstallationFlowError,
+               case .runtimeUnavailable = installationFlowError {
+                isRuntimeRecoveryVisible = true
+                step = .failed(message: installationFlowError.localizedDescription)
+            } else {
+                isRuntimeRecoveryVisible = false
+                step = .failed(message: "Setup failed: \(error.localizedDescription)")
+            }
             statusText = "Setup failed."
             installTask = nil
             activeProviderDownloadID = nil
@@ -373,6 +430,21 @@ final class InstallerOnboardingViewModel: ObservableObject {
         return InstalledArtifactMetadata(
             artifactPath: artifactFileURL.path,
             checksumSHA256: computedChecksum
+        )
+    }
+
+    private func ensureRuntimeReadyForInstall() async throws {
+        if await runtimeBootstrapper.isRuntimeReachable() {
+            return
+        }
+
+        if await runtimeBootstrapper.startRuntimeIfInstalled() {
+            logAction(category: "runtime.auto.started", message: "Started installed runtime automatically.")
+            return
+        }
+
+        throw InstallationFlowError.runtimeUnavailable(
+            "Local runtime is not running. Use 'Install Runtime In App' or 'Start Runtime', then retry setup."
         )
     }
 
@@ -571,7 +643,7 @@ struct InstallerOnboardingView: View {
                 .font(.headline)
             Text("Bzzbe runs models on-device by default. Setup will configure a local runtime and install a recommended model profile for this Mac.")
                 .foregroundStyle(.secondary)
-            Text("Model download is handled in-app. If the local runtime is unavailable, setup will show how to fix it and retry.")
+            Text("Model download and runtime setup are handled in-app. If runtime is unavailable, Bzzbe can install or start it for you.")
                 .font(.subheadline.weight(.semibold))
             Button("Continue") {
                 viewModel.continueFromIntro()
@@ -708,6 +780,40 @@ struct InstallerOnboardingView: View {
                 .foregroundStyle(.red)
             Text(message)
                 .foregroundStyle(.secondary)
+
+            if viewModel.isRuntimeRecoveryVisible {
+                GroupBox("Runtime Setup") {
+                    VStack(alignment: .leading, spacing: 8) {
+                        Text("Bzzbe can install/start the local runtime for you.")
+                            .font(.footnote)
+                            .foregroundStyle(.secondary)
+
+                        HStack(spacing: 10) {
+                            Button("Install Runtime In App") {
+                                viewModel.installRuntimeInApp()
+                            }
+                            .buttonStyle(.borderedProminent)
+                            .disabled(viewModel.isRuntimeBootstrapInProgress)
+
+                            Button("Start Runtime") {
+                                viewModel.startRuntimeFromApp()
+                            }
+                            .buttonStyle(.bordered)
+                            .disabled(viewModel.isRuntimeBootstrapInProgress)
+                        }
+
+                        if let runtimeBootstrapStatusMessage = viewModel.runtimeBootstrapStatusMessage {
+                            Text(runtimeBootstrapStatusMessage)
+                                .font(.footnote)
+                                .foregroundStyle(.secondary)
+                        }
+
+                        Link("Open Runtime Download Page", destination: URL(string: "https://ollama.com/download/mac")!)
+                            .font(.footnote)
+                    }
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                }
+            }
 
             HStack(spacing: 10) {
                 Button("Retry") {
