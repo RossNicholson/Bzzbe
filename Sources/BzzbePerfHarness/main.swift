@@ -34,8 +34,8 @@ private struct HarnessConfiguration {
     init(arguments: [String]) throws {
         var clientKind: ClientKind = .runtime
         var baseURL = URL(string: "http://127.0.0.1:11434")!
-        var modelIdentifier = "qwen2.5:7b-instruct-q4_K_M"
-        var modelDisplayName = "Qwen 2.5 7B Instruct"
+        var modelIdentifier = "qwen3:8b"
+        var modelDisplayName = "Qwen 3 8B"
         var prompt = "Explain what Bzzbe does in two short sentences."
         var runs = 3
         var label = Host.current().localizedName ?? "Unknown Host"
@@ -471,7 +471,7 @@ private func printUsageAndExit() -> Never {
     Options:
       --client runtime|mock      Inference backend (default: runtime)
       --base-url URL             Runtime base URL (default: http://127.0.0.1:11434)
-      --model IDENTIFIER         Model identifier (default: qwen2.5:7b-instruct-q4_K_M)
+      --model IDENTIFIER         Model identifier (default: qwen3:8b)
       --prompt TEXT              Prompt used for measurement
       --runs N                   Number of benchmark runs (default: 3)
       --label NAME               Label for this machine/report row

@@ -58,8 +58,8 @@ final class ChatViewModel: ObservableObject {
         conversationStore: any ConversationStoring = ChatViewModel.defaultConversationStore(),
         onRequestSetupRerun: @escaping () -> Void = {},
         model: InferenceModelDescriptor = InferenceModelDescriptor(
-            identifier: "qwen2.5:7b-instruct-q4_K_M",
-            displayName: "Qwen 2.5 7B Instruct",
+            identifier: "qwen3:8b",
+            displayName: "Qwen 3 8B",
             contextWindow: 32_768
         )
     ) {

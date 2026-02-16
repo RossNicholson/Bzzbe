@@ -27,7 +27,7 @@ Run from repository root on each machine:
 BZZBE_PERF_CLIENT=runtime \
 BZZBE_PERF_RUNS=3 \
 BZZBE_PERF_LABEL="<machine-label>" \
-BZZBE_PERF_MODEL="qwen2.5:7b-instruct-q4_K_M" \
+BZZBE_PERF_MODEL="qwen3:8b" \
 ./scripts/run-alpha-perf.sh
 ```
 
