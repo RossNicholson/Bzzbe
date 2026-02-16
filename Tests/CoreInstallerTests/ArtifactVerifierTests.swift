@@ -41,10 +41,46 @@ func validatesChecksumFormat() {
     }
 }
 
+@Test("Downloaded artifact passes checksum verification")
+func downloadedArtifactPassesVerification() async throws {
+    let directory = try makeTemporaryDirectory()
+    let sourceURL = directory.appendingPathComponent("source.bin")
+    let destinationURL = directory.appendingPathComponent("destination.bin")
+    try writeSeedFile(to: sourceURL, bytes: 768 * 1024)
+
+    let manager = ResumableArtifactDownloadManager(chunkSize: 32 * 1024)
+    let request = ArtifactDownloadRequest(id: "verify.downloaded", sourceURL: sourceURL, destinationURL: destinationURL)
+
+    var completed = false
+    let stream = manager.startDownload(request)
+    for try await event in stream {
+        if case .completed = event {
+            completed = true
+        }
+    }
+
+    #expect(completed)
+
+    let verifier = ArtifactVerifier()
+    let expectedChecksum = try ArtifactChecksum(value: verifier.checksum(for: sourceURL, algorithm: .sha256))
+    try verifier.verify(fileURL: destinationURL, against: expectedChecksum)
+}
+
 private func makeTemporaryDirectory() throws -> URL {
     let url = FileManager.default.temporaryDirectory
         .appendingPathComponent("bzzbe-verifier-tests", isDirectory: true)
         .appendingPathComponent(UUID().uuidString, isDirectory: true)
     try FileManager.default.createDirectory(at: url, withIntermediateDirectories: true)
     return url
+}
+
+private func writeSeedFile(to url: URL, bytes: Int) throws {
+    var data = Data(count: bytes)
+    data.withUnsafeMutableBytes { rawBuffer in
+        guard let base = rawBuffer.bindMemory(to: UInt8.self).baseAddress else { return }
+        for index in 0..<rawBuffer.count {
+            base[index] = UInt8((index * 17) % 251)
+        }
+    }
+    try data.write(to: url, options: .atomic)
 }
