@@ -53,7 +53,8 @@ Bzzbe is an open-source macOS app (Apple Silicon only) that installs and runs lo
 - ✅ JOB-013 complete: local runtime streaming client integrated via `InferenceClient` with protocol-level tests and chat wired to real backend.
 - ✅ JOB-010 complete: installed model metadata now persists locally after verified setup.
 - ✅ JOB-012 complete: chat now includes conversation history sidebar with restore/select/delete flows plus view model tests.
-- 🔜 Next: JOB-014 privacy defaults and consent messaging.
+- ✅ JOB-014 complete: settings now expose local-first consent messaging with telemetry/diagnostics opt-in controls defaulting to off.
+- 🔜 Next: JOB-015 installer/model action log.
 
 ## Early roadmap summary
 

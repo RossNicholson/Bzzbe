@@ -28,6 +28,7 @@ This job list turns the Phase 1 backlog into assignable work items with sequenci
 - [x] JOB-011 — Conversation storage schema + repository (SQLite-backed conversation/message CRUD with tests; chat persistence restored on launch).
 - [x] JOB-012 — Conversation list and history UX (history sidebar with conversation restore/select/delete plus `ChatViewModel` behavior tests).
 - [x] JOB-013 — Runtime integration (Ollama-compatible local streaming client + cancellation/error handling + protocol-level tests; chat defaults to runtime client).
+- [x] JOB-014 — Privacy defaults and consent messaging (Settings now includes local-first disclosure with telemetry/diagnostics toggles defaulting to off and persistence tests).
 
 ---
 
