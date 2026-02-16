@@ -60,7 +60,7 @@ private struct RouteDetailView: View {
         case .tasks:
             return "Tasks catalog placeholder. Agent templates will be added in a later phase."
         case .models:
-            return "Model installation and management UI placeholder."
+            return "Initial model setup is available at first launch. Ongoing model management UI is next phase work."
         case .settings:
             return "Settings placeholder for privacy controls and diagnostics."
         }
