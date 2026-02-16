@@ -1,5 +1,6 @@
 #if canImport(SwiftUI)
 import CoreHardware
+import CoreInference
 import CoreInstaller
 import SwiftUI
 
@@ -50,7 +51,9 @@ private struct RouteDetailView: View {
         switch route {
         case .chat:
             ChatView(onRequestSetupRerun: onRequestSetupRerun)
-        case .tasks, .models:
+        case .tasks:
+            TaskWorkspaceView(model: defaultModel)
+        case .models:
             RoutePlaceholderView(
                 title: route.title,
                 subtitle: route.subtitle,
@@ -67,12 +70,20 @@ private struct RouteDetailView: View {
         case .chat:
             return "Chat shell ready. Streaming UI will be implemented in JOB-006."
         case .tasks:
-            return "Tasks catalog placeholder. Agent templates will be added in a later phase."
+            return ""
         case .models:
             return "Initial model setup is available at first launch. Ongoing model management UI is next phase work."
         case .settings:
             return ""
         }
+    }
+
+    private var defaultModel: InferenceModelDescriptor {
+        InferenceModelDescriptor(
+            identifier: "qwen3:8b",
+            displayName: "Qwen 3 8B",
+            contextWindow: 32_768
+        )
     }
 }
 
