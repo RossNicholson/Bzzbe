@@ -49,7 +49,8 @@ Bzzbe is an open-source macOS app (Apple Silicon only) that installs and runs lo
 - ✅ JOB-011 complete: SQLite conversation storage with CRUD operations, test coverage, and chat persistence/restore wiring.
 - ✅ JOB-007 complete: first-run onboarding flow with hardware-aware recommendation, install progress, and failure/retry states.
 - ✅ JOB-008 complete: resumable artifact download manager with progress stream and installer integration.
-- 🔜 Next: JOB-009 checksum and artifact verification.
+- ✅ JOB-009 complete: SHA-256 artifact verification enforced before install completion with mismatch handling and tests.
+- 🔜 Next: JOB-013 runtime integration (real local backend).
 
 ## Early roadmap summary
 

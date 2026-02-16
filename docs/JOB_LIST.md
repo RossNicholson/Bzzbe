@@ -23,6 +23,7 @@ This job list turns the Phase 1 backlog into assignable work items with sequenci
 - [x] JOB-006 — Implement streaming chat UI (composer, streaming token render, stop/retry controls complete against mock client).
 - [x] JOB-007 — Add first-run installer UX (intro/recommendation/progress/failure+retry flow wired as default first-launch path).
 - [x] JOB-008 — Download manager with resume (resumable partial-file downloader + progress events + cancellation/resume tests integrated with installer UI).
+- [x] JOB-009 — Checksum and artifact verification (SHA-256 verifier integrated in installer completion path with failing mismatch tests).
 - [x] JOB-011 — Conversation storage schema + repository (SQLite-backed conversation/message CRUD with tests; chat persistence restored on launch).
 
 ---
