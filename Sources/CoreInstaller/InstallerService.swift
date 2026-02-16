@@ -73,7 +73,7 @@ public struct InstallerService: Installing {
     private let catalog: [ModelCandidate]
 
     public init(catalog: [ModelCandidate] = defaultCatalog) {
-        self.catalog = catalog
+        self.catalog = catalog.isEmpty ? Self.defaultCatalog : catalog
     }
 
     public func recommendedTier() -> InstallRecommendation {

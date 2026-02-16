@@ -1,4 +1,5 @@
 #if canImport(SwiftUI)
+import CoreHardware
 import SwiftUI
 
 struct AppShellView: View {
@@ -39,27 +40,17 @@ private struct RouteDetailView: View {
     let capabilityProfile: CapabilityProfile
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 12) {
-            Text(route.title)
-                .font(.largeTitle.bold())
-            Text(route.subtitle)
-                .font(.title3)
-                .foregroundStyle(.secondary)
-
-            Divider()
-
-            Text(content)
-                .font(.body)
-                .foregroundStyle(.secondary)
-
-            if route == .settings {
-                CapabilityDebugView(profile: capabilityProfile)
-            }
-
-            Spacer()
+        switch route {
+        case .chat:
+            ChatView()
+        case .tasks, .models, .settings:
+            RoutePlaceholderView(
+                title: route.title,
+                subtitle: route.subtitle,
+                content: content,
+                capabilityProfile: route == .settings ? capabilityProfile : nil
+            )
         }
-        .padding(24)
-        .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
     }
 
     private var content: String {
@@ -73,6 +64,37 @@ private struct RouteDetailView: View {
         case .settings:
             return "Settings placeholder for privacy controls and diagnostics."
         }
+    }
+}
+
+private struct RoutePlaceholderView: View {
+    let title: String
+    let subtitle: String
+    let content: String
+    let capabilityProfile: CapabilityProfile?
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 12) {
+            Text(title)
+                .font(.largeTitle.bold())
+            Text(subtitle)
+                .font(.title3)
+                .foregroundStyle(.secondary)
+
+            Divider()
+
+            Text(content)
+                .font(.body)
+                .foregroundStyle(.secondary)
+
+            if let capabilityProfile {
+                CapabilityDebugView(profile: capabilityProfile)
+            }
+
+            Spacer()
+        }
+        .padding(24)
+        .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
     }
 }
 

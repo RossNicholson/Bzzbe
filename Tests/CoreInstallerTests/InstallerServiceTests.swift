@@ -23,3 +23,14 @@ func recommendsSmallWhenResourcesConstrained() {
     #expect(recommendation.tier == "small")
     #expect(!recommendation.candidate.id.isEmpty)
 }
+
+@Test("InstallerService ignores empty custom catalogs and uses defaults")
+func ignoresEmptyCatalog() {
+    let service = InstallerService(catalog: [])
+    let profile = CapabilityProfile(architecture: "arm64", memoryGB: 16, freeDiskGB: 64, performanceCores: 8)
+
+    let recommendation = service.recommendedInstall(for: profile)
+
+    #expect(!recommendation.candidate.id.isEmpty)
+    #expect(InstallerService.defaultCatalog.contains(where: { $0.id == recommendation.candidate.id }))
+}
