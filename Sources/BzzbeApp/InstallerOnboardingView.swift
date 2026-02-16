@@ -323,54 +323,64 @@ final class InstallerOnboardingViewModel: ObservableObject {
         source: ProviderArtifactSource
     ) async throws -> InstalledArtifactMetadata {
         let artifactFileURL = try destinationArtifactFileURL(for: candidate, source: source)
-        let downloadRequestID = "provider.\(candidate.id)"
-        activeProviderDownloadID = downloadRequestID
+        let hasReusableArtifact = reusableProviderArtifactExists(at: artifactFileURL)
+        if hasReusableArtifact {
+            progress = 1
+            statusText = "Using previously downloaded model artifact."
+            logAction(
+                category: "provider.download.reused",
+                message: "Reused existing provider artifact for \(candidate.id) at \(artifactFileURL.path)."
+            )
+        } else {
+            let downloadRequestID = "provider.\(candidate.id)"
+            activeProviderDownloadID = downloadRequestID
 
-        logAction(
-            category: "provider.download.started",
-            message: "Downloading \(candidate.id) from \(source.providerName)."
-        )
+            logAction(
+                category: "provider.download.started",
+                message: "Downloading \(candidate.id) from \(source.providerName)."
+            )
 
-        let request = ArtifactDownloadRequest(
-            id: downloadRequestID,
-            sourceURL: source.artifactURL,
-            destinationURL: artifactFileURL
-        )
-        let stream = artifactDownloader.startDownload(request)
-        var didCompleteDownload = false
+            let request = ArtifactDownloadRequest(
+                id: downloadRequestID,
+                sourceURL: source.artifactURL,
+                destinationURL: artifactFileURL
+            )
+            let stream = artifactDownloader.startDownload(request)
+            var didCompleteDownload = false
 
-        for try await event in stream {
-            try Task.checkCancellation()
-            switch event {
-            case let .started(resumedBytes, totalBytes):
-                progress = fraction(numerator: resumedBytes, denominator: totalBytes)
-                if resumedBytes > 0 {
-                    statusText = "Resuming provider download..."
-                } else {
+            for try await event in stream {
+                try Task.checkCancellation()
+                switch event {
+                case let .started(resumedBytes, totalBytes):
+                    progress = fraction(numerator: resumedBytes, denominator: totalBytes)
+                    if resumedBytes > 0 {
+                        statusText = "Resuming provider download..."
+                    } else {
+                        statusText = "Downloading model from provider..."
+                    }
+                case let .progress(bytesWritten, totalBytes):
+                    progress = fraction(numerator: bytesWritten, denominator: totalBytes)
                     statusText = "Downloading model from provider..."
+                case .completed:
+                    progress = 1
+                    statusText = "Provider download complete."
+                    didCompleteDownload = true
                 }
-            case let .progress(bytesWritten, totalBytes):
-                progress = fraction(numerator: bytesWritten, denominator: totalBytes)
-                statusText = "Downloading model from provider..."
-            case .completed:
-                progress = 1
-                statusText = "Provider download complete."
-                didCompleteDownload = true
             }
-        }
-        activeProviderDownloadID = nil
+            activeProviderDownloadID = nil
 
-        if !didCompleteDownload {
-            if Task.isCancelled {
-                throw CancellationError()
+            if !didCompleteDownload {
+                if Task.isCancelled {
+                    throw CancellationError()
+                }
+                throw InstallationFlowError.downloadEndedUnexpectedly
             }
-            throw InstallationFlowError.downloadEndedUnexpectedly
-        }
 
-        logAction(
-            category: "provider.download.completed",
-            message: "Downloaded provider artifact for \(candidate.id) to \(artifactFileURL.path)."
-        )
+            logAction(
+                category: "provider.download.completed",
+                message: "Downloaded provider artifact for \(candidate.id) to \(artifactFileURL.path)."
+            )
+        }
 
         let computedChecksum = try artifactVerifier.checksum(for: artifactFileURL, algorithm: .sha256)
         if let expectedChecksum = source.checksumSHA256 {
@@ -425,6 +435,15 @@ final class InstallerOnboardingViewModel: ObservableObject {
             artifactPath: artifactFileURL.path,
             checksumSHA256: computedChecksum
         )
+    }
+
+    private func reusableProviderArtifactExists(at artifactFileURL: URL) -> Bool {
+        guard fileManager.fileExists(atPath: artifactFileURL.path) else { return false }
+        guard let values = try? artifactFileURL.resourceValues(forKeys: [.isRegularFileKey, .fileSizeKey]) else {
+            return false
+        }
+        guard values.isRegularFile == true else { return false }
+        return (values.fileSize ?? 0) > 0
     }
 
     private func ensureRuntimeReadyForInstall() async throws {
