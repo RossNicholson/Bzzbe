@@ -14,6 +14,7 @@ Based on `docs/JOB_LIST.md`, the following are complete:
 - ✅ **JOB-004** — Hardware capability profiler.
 - ✅ **JOB-005** — Inference abstraction (protocol + mock streaming + tests).
 - ✅ **JOB-006** — Streaming chat UI (send/stop/retry + token rendering against mock runtime).
+- ✅ **JOB-011** — Conversation storage schema + repository (SQLite CRUD + tested persistence).
 
 ### What this means practically
 
@@ -29,7 +30,6 @@ Based on `docs/JOB_LIST.md`, the following are complete:
 - **JOB-007** — First-run installer UX.
 - **JOB-008** — Download manager with resume.
 - **JOB-009** — Checksum and artifact verification.
-- **JOB-011** — Conversation storage schema + repository.
 - **JOB-013** — Runtime integration (real local backend).
 
 ### P1 tasks still open (alpha quality and polish)
@@ -48,16 +48,15 @@ Based on `docs/JOB_LIST.md`, the following are complete:
 
 Recommended sequence from now:
 
-1. **JOB-011** (storage foundation)
-2. **JOB-007** (installer UX)
-3. **JOB-008** (download manager)
-4. **JOB-009** (artifact verification)
-5. **JOB-013** (real runtime integration)
-6. **JOB-010** (installed model metadata persistence)
-7. **JOB-012** (history UI)
-8. **JOB-014** + **JOB-015** (privacy + action log)
-9. **JOB-016** (performance/reporting)
-10. **JOB-017** (failure-recovery hardening)
+1. **JOB-007** (installer UX)
+2. **JOB-008** (download manager)
+3. **JOB-009** (artifact verification)
+4. **JOB-013** (real runtime integration)
+5. **JOB-010** (installed model metadata persistence)
+6. **JOB-012** (history UI polish on top of persisted data)
+7. **JOB-014** + **JOB-015** (privacy + action log)
+8. **JOB-016** (performance/reporting)
+9. **JOB-017** (failure-recovery hardening)
 
 ## 4) Short gap analysis
 
@@ -66,7 +65,7 @@ Recommended sequence from now:
 - No first-run installer flow for non-technical users yet.
 - No resumable verified artifact pipeline yet.
 - No real runtime binding to local model backend yet.
-- No persisted conversation/history experience yet.
+- Conversation persistence foundation exists, but conversation browsing/history UX still needs completion.
 
 ### Biggest risk gaps
 
@@ -76,18 +75,18 @@ Recommended sequence from now:
 
 ## 5) Suggested immediate sprint (next 7-10 days)
 
-- **Primary track (P0):** JOB-011 + JOB-007.
-- **Parallel track (P0):** JOB-008 skeleton + plumbing for resume events.
+- **Primary track (P0):** JOB-007 + JOB-008.
+- **Parallel track (P0):** JOB-009 verifier scaffolding.
 - **Exit criteria for sprint:**
-  - Conversation persistence works across relaunch.
   - Installer flow UI exists with recommendation display and progress placeholders.
-  - Download manager skeleton is wired to installer progress.
+  - Download manager supports resumable transfers and progress events.
+  - Artifact verification path is wired end-to-end.
 
 ## 6) Definition of “on-track” after next sprint
 
 You are on-track if the repository shows:
 
-- JOB-011 marked complete with tested storage repository.
 - JOB-007 complete or near-complete (end-to-end screens scaffolded with retry states).
-- JOB-008 skeleton landed with integration points for resume/verification.
+- JOB-008 complete with verified resume behavior.
+- JOB-009 complete with enforced checksum validation and actionable errors.
 - CI green on all existing + new tests.
