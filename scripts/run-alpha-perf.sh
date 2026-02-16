@@ -11,6 +11,7 @@ RUNS="${BZZBE_PERF_RUNS:-3}"
 MODEL="${BZZBE_PERF_MODEL:-qwen2.5:7b-instruct-q4_K_M}"
 BASE_URL="${BZZBE_PERF_BASE_URL:-http://127.0.0.1:11434}"
 PROMPT="${BZZBE_PERF_PROMPT:-Explain what Bzzbe does in two short sentences.}"
+RUNTIME_PROCESS="${BZZBE_PERF_RUNTIME_PROCESS:-ollama}"
 STAMP="$(date +%Y%m%d-%H%M%S)"
 OUT_FILE="${REPORT_DIR}/alpha-perf-${STAMP}.json"
 
@@ -23,6 +24,7 @@ swift run BzzbePerfHarness \
   --prompt "${PROMPT}" \
   --runs "${RUNS}" \
   --label "${LABEL}" \
+  --runtime-process "${RUNTIME_PROCESS}" \
   --json-out "${OUT_FILE}"
 
 echo "saved raw report: ${OUT_FILE}"
