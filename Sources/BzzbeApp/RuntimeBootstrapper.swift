@@ -56,6 +56,7 @@ actor OllamaRuntimeBootstrapper: RuntimeBootstrapping {
     private let artifactDownloader: ArtifactDownloading
     private let fileManager: FileManager
     private let urlSession: URLSession
+    private var runtimeServeProcess: Process?
 
     init(
         configuration: RuntimeBootstrapConfiguration = .init(),
@@ -228,9 +229,29 @@ actor OllamaRuntimeBootstrapper: RuntimeBootstrapping {
     }
 
     private func launchRuntime(at appURL: URL) throws {
+        if let runtimeServeProcess, runtimeServeProcess.isRunning {
+            return
+        }
+
+        let runtimeExecutableURL = appURL
+            .appendingPathComponent("Contents", isDirectory: true)
+            .appendingPathComponent("MacOS", isDirectory: true)
+            .appendingPathComponent("ollama", isDirectory: false)
+
+        if fileManager.fileExists(atPath: runtimeExecutableURL.path) {
+            let serveProcess = Process()
+            serveProcess.executableURL = runtimeExecutableURL
+            serveProcess.arguments = ["serve"]
+            serveProcess.standardOutput = Pipe()
+            serveProcess.standardError = Pipe()
+            try serveProcess.run()
+            runtimeServeProcess = serveProcess
+            return
+        }
+
         let process = Process()
         process.executableURL = URL(fileURLWithPath: "/usr/bin/open")
-        process.arguments = [appURL.path]
+        process.arguments = ["-g", "-j", appURL.path]
         try process.run()
         process.waitUntilExit()
     }
