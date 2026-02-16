@@ -20,6 +20,7 @@ This job list turns the Phase 1 backlog into assignable work items with sequenci
 - [x] JOB-003 — Apple Silicon eligibility gate (launch-time gate + unsupported screen complete).
 - [x] JOB-004 — Hardware capability profiler (live profile values + settings debug display complete).
 - [x] JOB-005 — Define inference abstraction (request/event protocol + cancellable mock streaming + tests complete).
+- [x] JOB-006 — Implement streaming chat UI (composer, streaming token render, stop/retry controls complete against mock client).
 
 ---
 

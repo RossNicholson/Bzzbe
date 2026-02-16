@@ -13,19 +13,19 @@ Based on `docs/JOB_LIST.md`, the following are complete:
 - ✅ **JOB-003** — Apple Silicon eligibility gate.
 - ✅ **JOB-004** — Hardware capability profiler.
 - ✅ **JOB-005** — Inference abstraction (protocol + mock streaming + tests).
+- ✅ **JOB-006** — Streaming chat UI (send/stop/retry + token rendering against mock runtime).
 
 ### What this means practically
 
 - The project has a stable base architecture and module boundaries.
 - Apple Silicon-only gating is implemented early, which is correct for product scope.
 - Hardware profiling and model-tier recommendation primitives are in place.
-- The app can now move into visible user value work (streaming chat + installer UX).
+- The app now has a visible chat loop and can move into installer, persistence, and runtime integration work.
 
 ## 2) Remaining tasks
 
 ### P0 tasks still open (critical for alpha)
 
-- **JOB-006** — Streaming chat UI.
 - **JOB-007** — First-run installer UX.
 - **JOB-008** — Download manager with resume.
 - **JOB-009** — Checksum and artifact verification.
@@ -39,28 +39,30 @@ Based on `docs/JOB_LIST.md`, the following are complete:
 - **JOB-014** — Privacy defaults and consent messaging.
 - **JOB-015** — Installer/model action log.
 - **JOB-016** — Alpha performance harness + report.
-- **JOB-017** — Release readiness checklist + QA signoff.
+
+### P2 tasks still open
+
+- **JOB-017** — Failure-recovery hardening.
 
 ## 3) Dependency-aware recommended order
 
 Recommended sequence from now:
 
-1. **JOB-006** (unblocks visible MVP chat loop)
-2. **JOB-011** (storage foundation)
-3. **JOB-007** (installer UX)
-4. **JOB-008** (download manager)
-5. **JOB-009** (artifact verification)
-6. **JOB-013** (real runtime integration)
-7. **JOB-010** (installed model metadata persistence)
-8. **JOB-012** (history UI)
-9. **JOB-014** + **JOB-015** (privacy + action log)
-10. **JOB-016** + **JOB-017** (performance/reporting + release readiness)
+1. **JOB-011** (storage foundation)
+2. **JOB-007** (installer UX)
+3. **JOB-008** (download manager)
+4. **JOB-009** (artifact verification)
+5. **JOB-013** (real runtime integration)
+6. **JOB-010** (installed model metadata persistence)
+7. **JOB-012** (history UI)
+8. **JOB-014** + **JOB-015** (privacy + action log)
+9. **JOB-016** (performance/reporting)
+10. **JOB-017** (failure-recovery hardening)
 
 ## 4) Short gap analysis
 
 ### Biggest product gaps right now
 
-- No real streaming chat experience in the UI yet.
 - No first-run installer flow for non-technical users yet.
 - No resumable verified artifact pipeline yet.
 - No real runtime binding to local model backend yet.
@@ -74,19 +76,18 @@ Recommended sequence from now:
 
 ## 5) Suggested immediate sprint (next 7-10 days)
 
-- **Primary track (P0):** JOB-006 + JOB-011.
-- **Parallel track (P0):** JOB-007 start, then JOB-008 skeleton.
+- **Primary track (P0):** JOB-011 + JOB-007.
+- **Parallel track (P0):** JOB-008 skeleton + plumbing for resume events.
 - **Exit criteria for sprint:**
-  - User can send prompt and see streamed response in UI.
   - Conversation persistence works across relaunch.
   - Installer flow UI exists with recommendation display and progress placeholders.
+  - Download manager skeleton is wired to installer progress.
 
 ## 6) Definition of “on-track” after next sprint
 
 You are on-track if the repository shows:
 
-- JOB-006 marked complete with working send/stop/retry flow.
 - JOB-011 marked complete with tested storage repository.
-- JOB-007 at least partially complete (end-to-end screens scaffolded).
+- JOB-007 complete or near-complete (end-to-end screens scaffolded with retry states).
+- JOB-008 skeleton landed with integration points for resume/verification.
 - CI green on all existing + new tests.
-
