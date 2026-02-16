@@ -39,7 +39,7 @@ Based on `docs/JOB_LIST.md`, the following are complete:
 
 ### P1 tasks still open (alpha quality and polish)
 
-- **JOB-016** — Alpha performance harness + report.
+- **JOB-016** — Alpha performance harness + report (in progress: harness + baseline report committed; real runtime two-tier data still pending).
 
 ### P2 tasks still open
 
@@ -56,7 +56,7 @@ Recommended sequence from now:
 
 ### Biggest product gaps right now
 
-- Performance benchmark/reporting workflow is not yet captured in-repo.
+- Real runtime benchmark data is still missing for the required two Apple Silicon tiers.
 
 ### Biggest risk gaps
 
@@ -67,13 +67,13 @@ Recommended sequence from now:
 - **Primary track (P1):** JOB-016 performance harness/report setup.
 - **Parallel track (P2):** JOB-017 failure-recovery hardening.
 - **Exit criteria for sprint:**
-  - Initial performance harness/report baseline exists for Apple Silicon tiers.
+  - Real runtime measurements are captured for two Apple Silicon tiers and merged into `docs/reports/alpha-01.md`.
   - Failure-recovery scenarios are validated and documented.
 
 ## 6) Definition of “on-track” after next sprint
 
 You are on-track if the repository shows:
 
-- JOB-016 landed with reproducible performance capture and report output.
+- JOB-016 report updated with real runtime metrics for two Apple Silicon tiers.
 - JOB-017 landed with improved recovery behavior for cancellation/partial setup cases.
 - CI green on all existing + new tests.
