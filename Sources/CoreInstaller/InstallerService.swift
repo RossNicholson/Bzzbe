@@ -61,6 +61,7 @@ public enum InstallRecommendationStatus: String, Sendable, Equatable {
 public protocol Installing {
     func recommendedTier() -> InstallRecommendation
     func recommendedInstall(for profile: CapabilityProfile) -> InstallRecommendation
+    func compatibleCandidates(for profile: CapabilityProfile) -> [ModelCandidate]
 }
 
 public struct InstallerService: Installing {
@@ -120,6 +121,11 @@ public struct InstallerService: Installing {
         return recommendedInstall(for: fallbackProfile)
     }
 
+    public func compatibleCandidates(for profile: CapabilityProfile) -> [ModelCandidate] {
+        memoryCompatibleCandidates(for: profile)
+            .filter { profile.freeDiskGB >= Self.requiredDiskGB(for: $0) }
+    }
+
     public func recommendedInstall(for profile: CapabilityProfile) -> InstallRecommendation {
         let targetTier: ModelTier
         if profile.memoryGB >= 24 {
@@ -130,10 +136,8 @@ public struct InstallerService: Installing {
             targetTier = .small
         }
 
-        let memoryFiltered = catalog
-            .filter { $0.minimumMemoryGB <= profile.memoryGB }
-        let diskFiltered = memoryFiltered
-            .filter { profile.freeDiskGB >= Self.requiredDiskGB(for: $0) }
+        let memoryFiltered = memoryCompatibleCandidates(for: profile)
+        let diskFiltered = compatibleCandidates(for: profile)
 
         if let chosen = diskFiltered.first(where: { $0.tier == targetTier }) ?? diskFiltered.last {
             return InstallRecommendation(
@@ -161,6 +165,10 @@ public struct InstallerService: Installing {
             minimumRequiredMemoryGB: minimumMemory,
             minimumRequiredDiskGB: minimumDisk
         )
+    }
+
+    private func memoryCompatibleCandidates(for profile: CapabilityProfile) -> [ModelCandidate] {
+        catalog.filter { $0.minimumMemoryGB <= profile.memoryGB }
     }
 
     private static func requiredDiskGB(for candidate: ModelCandidate) -> Int {

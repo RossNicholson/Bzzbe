@@ -51,3 +51,17 @@ func returnsInsufficientResourcesWhenNoModelFits() {
     #expect((recommendation.minimumRequiredMemoryGB ?? 0) >= 8)
     #expect((recommendation.minimumRequiredDiskGB ?? 0) >= 4)
 }
+
+@Test("InstallerService exposes compatible candidates for manual override choices")
+func returnsCompatibleCandidatesForProfile() {
+    let service = InstallerService(catalog: [
+        .init(id: "small", displayName: "Small", approximateDownloadSizeGB: 2.0, minimumMemoryGB: 8, tier: .small),
+        .init(id: "balanced", displayName: "Balanced", approximateDownloadSizeGB: 5.0, minimumMemoryGB: 16, tier: .balanced),
+        .init(id: "high", displayName: "High", approximateDownloadSizeGB: 9.0, minimumMemoryGB: 24, tier: .highQuality)
+    ])
+    let profile = CapabilityProfile(architecture: "arm64", memoryGB: 16, freeDiskGB: 11, performanceCores: 8)
+
+    let candidates = service.compatibleCandidates(for: profile)
+
+    #expect(candidates.map(\.id) == ["small", "balanced"])
+}
