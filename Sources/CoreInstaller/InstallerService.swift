@@ -29,15 +29,33 @@ public struct ModelCandidate: Sendable, Equatable {
 }
 
 public struct InstallRecommendation: Sendable, Equatable {
-    public let tier: String
-    public let candidate: ModelCandidate
+    public let status: InstallRecommendationStatus
+    public let tier: String?
+    public let candidate: ModelCandidate?
     public let rationale: String
+    public let minimumRequiredMemoryGB: Int?
+    public let minimumRequiredDiskGB: Int?
 
-    public init(tier: String, candidate: ModelCandidate, rationale: String) {
+    public init(
+        status: InstallRecommendationStatus,
+        tier: String? = nil,
+        candidate: ModelCandidate? = nil,
+        rationale: String,
+        minimumRequiredMemoryGB: Int? = nil,
+        minimumRequiredDiskGB: Int? = nil
+    ) {
+        self.status = status
         self.tier = tier
         self.candidate = candidate
         self.rationale = rationale
+        self.minimumRequiredMemoryGB = minimumRequiredMemoryGB
+        self.minimumRequiredDiskGB = minimumRequiredDiskGB
     }
+}
+
+public enum InstallRecommendationStatus: String, Sendable, Equatable {
+    case ready
+    case insufficientResources = "insufficient_resources"
 }
 
 public protocol Installing {
@@ -91,18 +109,40 @@ public struct InstallerService: Installing {
             targetTier = .small
         }
 
-        let diskFiltered = catalog
+        let memoryFiltered = catalog
             .filter { $0.minimumMemoryGB <= profile.memoryGB }
-            .filter { profile.freeDiskGB >= Int(($0.approximateDownloadSizeGB * 2.0).rounded(.up)) }
+        let diskFiltered = memoryFiltered
+            .filter { profile.freeDiskGB >= Self.requiredDiskGB(for: $0) }
 
-        let chosen = diskFiltered.first(where: { $0.tier == targetTier })
-            ?? diskFiltered.last
-            ?? catalog.first!
+        if let chosen = diskFiltered.first(where: { $0.tier == targetTier }) ?? diskFiltered.last {
+            return InstallRecommendation(
+                status: .ready,
+                tier: chosen.tier.rawValue,
+                candidate: chosen,
+                rationale: "Selected \(chosen.displayName) for \(profile.memoryGB)GB RAM and \(profile.freeDiskGB)GB free disk."
+            )
+        }
+
+        let requirementSource = memoryFiltered.isEmpty ? catalog : memoryFiltered
+        let requirementCandidate = requirementSource.min { lhs, rhs in
+            if lhs.minimumMemoryGB != rhs.minimumMemoryGB {
+                return lhs.minimumMemoryGB < rhs.minimumMemoryGB
+            }
+            return lhs.approximateDownloadSizeGB < rhs.approximateDownloadSizeGB
+        }
+
+        let minimumMemory = requirementCandidate?.minimumMemoryGB
+        let minimumDisk = requirementCandidate.map { Self.requiredDiskGB(for: $0) }
 
         return InstallRecommendation(
-            tier: chosen.tier.rawValue,
-            candidate: chosen,
-            rationale: "Selected \(chosen.displayName) for \(profile.memoryGB)GB RAM and \(profile.freeDiskGB)GB free disk."
+            status: .insufficientResources,
+            rationale: "No compatible model for \(profile.memoryGB)GB RAM and \(profile.freeDiskGB)GB free disk.",
+            minimumRequiredMemoryGB: minimumMemory,
+            minimumRequiredDiskGB: minimumDisk
         )
+    }
+
+    private static func requiredDiskGB(for candidate: ModelCandidate) -> Int {
+        Int((candidate.approximateDownloadSizeGB * 2.0).rounded(.up))
     }
 }

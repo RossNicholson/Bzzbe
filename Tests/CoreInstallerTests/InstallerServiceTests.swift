@@ -9,8 +9,9 @@ func recommendsHighQualityOn24GB() {
 
     let recommendation = service.recommendedInstall(for: profile)
 
+    #expect(recommendation.status == .ready)
     #expect(recommendation.tier == "high_quality")
-    #expect(recommendation.candidate.minimumMemoryGB <= profile.memoryGB)
+    #expect((recommendation.candidate?.minimumMemoryGB ?? .max) <= profile.memoryGB)
 }
 
 @Test("InstallerService falls back to small tier on constrained machines")
@@ -20,8 +21,9 @@ func recommendsSmallWhenResourcesConstrained() {
 
     let recommendation = service.recommendedInstall(for: profile)
 
+    #expect(recommendation.status == .ready)
     #expect(recommendation.tier == "small")
-    #expect(!recommendation.candidate.id.isEmpty)
+    #expect(!(recommendation.candidate?.id.isEmpty ?? true))
 }
 
 @Test("InstallerService ignores empty custom catalogs and uses defaults")
@@ -31,6 +33,21 @@ func ignoresEmptyCatalog() {
 
     let recommendation = service.recommendedInstall(for: profile)
 
-    #expect(!recommendation.candidate.id.isEmpty)
-    #expect(InstallerService.defaultCatalog.contains(where: { $0.id == recommendation.candidate.id }))
+    #expect(recommendation.status == .ready)
+    #expect(!(recommendation.candidate?.id.isEmpty ?? true))
+    #expect(InstallerService.defaultCatalog.contains(where: { $0.id == recommendation.candidate?.id }))
+}
+
+@Test("InstallerService returns insufficientResources when no model fits")
+func returnsInsufficientResourcesWhenNoModelFits() {
+    let service = InstallerService()
+    let profile = CapabilityProfile(architecture: "arm64", memoryGB: 4, freeDiskGB: 1, performanceCores: 4)
+
+    let recommendation = service.recommendedInstall(for: profile)
+
+    #expect(recommendation.status == .insufficientResources)
+    #expect(recommendation.tier == nil)
+    #expect(recommendation.candidate == nil)
+    #expect((recommendation.minimumRequiredMemoryGB ?? 0) >= 8)
+    #expect((recommendation.minimumRequiredDiskGB ?? 0) >= 4)
 }
