@@ -1,5 +1,6 @@
 #if canImport(SwiftUI)
 import CoreHardware
+import CoreInstaller
 import SwiftUI
 
 struct AppShellView: View {
@@ -103,6 +104,7 @@ private struct RoutePlaceholderView: View {
 private struct SettingsView: View {
     let capabilityProfile: CapabilityProfile
     @StateObject private var privacySettings = PrivacySettingsModel()
+    @StateObject private var actionLogModel = InstallerActionLogModel()
 
     var body: some View {
         ScrollView {
@@ -140,10 +142,64 @@ private struct SettingsView: View {
                     .frame(maxWidth: .infinity, alignment: .leading)
                 }
 
+                GroupBox("Installer and model action log") {
+                    VStack(alignment: .leading, spacing: 10) {
+                        HStack(spacing: 10) {
+                            Button("Refresh Log") {
+                                actionLogModel.refresh()
+                            }
+                            .buttonStyle(.bordered)
+
+                            Button("Export as Text") {
+                                actionLogModel.exportToDownloads()
+                            }
+                            .buttonStyle(.borderedProminent)
+                        }
+
+                        if let exportStatusMessage = actionLogModel.exportStatusMessage {
+                            Text(exportStatusMessage)
+                                .font(.footnote)
+                                .foregroundStyle(.secondary)
+                        }
+
+                        if let errorMessage = actionLogModel.errorMessage {
+                            Text(errorMessage)
+                                .font(.footnote)
+                                .foregroundStyle(.red)
+                        }
+
+                        if actionLogModel.entries.isEmpty {
+                            Text("No installer/model actions recorded yet.")
+                                .font(.footnote)
+                                .foregroundStyle(.secondary)
+                        } else {
+                            VStack(alignment: .leading, spacing: 8) {
+                                ForEach(Array(actionLogModel.entries.prefix(20))) { entry in
+                                    VStack(alignment: .leading, spacing: 2) {
+                                        Text("[\(entry.category)] \(entry.message)")
+                                            .font(.footnote)
+                                            .frame(maxWidth: .infinity, alignment: .leading)
+                                        Text(entry.timestamp, format: .dateTime.year().month().day().hour().minute().second())
+                                            .font(.caption2)
+                                            .foregroundStyle(.secondary)
+                                    }
+                                    if entry.id != actionLogModel.entries.prefix(20).last?.id {
+                                        Divider()
+                                    }
+                                }
+                            }
+                        }
+                    }
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                }
+
                 CapabilityDebugView(profile: capabilityProfile)
             }
             .padding(24)
             .frame(maxWidth: .infinity, alignment: .topLeading)
+        }
+        .onAppear {
+            actionLogModel.refresh()
         }
     }
 }

@@ -26,6 +26,7 @@ final class InstallerOnboardingViewModel: ObservableObject {
     private let artifactDownloader: ArtifactDownloading
     private let artifactVerifier: ArtifactVerifying
     private let installedModelStore: InstalledModelStoring
+    private let actionLogStore: InstallerActionLogging
     private let fileManager: FileManager
     private var installTask: Task<Void, Never>?
     private var activeDownloadID: String?
@@ -36,6 +37,7 @@ final class InstallerOnboardingViewModel: ObservableObject {
         artifactDownloader: ArtifactDownloading = ResumableArtifactDownloadManager(),
         artifactVerifier: ArtifactVerifying = ArtifactVerifier(),
         installedModelStore: InstalledModelStoring = JSONInstalledModelStore.defaultStore(),
+        actionLogStore: InstallerActionLogging = JSONInstallerActionLogStore.defaultStore(),
         fileManager: FileManager = .default
     ) {
         self.profile = profile
@@ -43,6 +45,7 @@ final class InstallerOnboardingViewModel: ObservableObject {
         self.artifactDownloader = artifactDownloader
         self.artifactVerifier = artifactVerifier
         self.installedModelStore = installedModelStore
+        self.actionLogStore = actionLogStore
         self.fileManager = fileManager
         self.recommendation = installerService.recommendedInstall(for: profile)
     }
@@ -62,6 +65,10 @@ final class InstallerOnboardingViewModel: ObservableObject {
 
     func startInstall() {
         guard recommendation.status == .ready else {
+            logAction(
+                category: "install.blocked",
+                message: "Install blocked due to insufficient resources: \(insufficientResourcesMessage())"
+            )
             step = .failed(message: insufficientResourcesMessage())
             return
         }
@@ -98,8 +105,13 @@ final class InstallerOnboardingViewModel: ObservableObject {
             }
 
             let plan = try makeDownloadPlan(for: candidate)
+            logAction(
+                category: "install.started",
+                message: "Starting install for \(plan.candidate.id) (\(plan.tier))."
+            )
             activeDownloadID = plan.request.id
             var completed = false
+            var didLogDownloadStart = false
 
             let stream = artifactDownloader.startDownload(plan.request)
             for try await event in stream {
@@ -107,6 +119,20 @@ final class InstallerOnboardingViewModel: ObservableObject {
                 switch event {
                 case let .started(resumedBytes, totalBytes):
                     progress = fraction(numerator: resumedBytes, denominator: totalBytes)
+                    if !didLogDownloadStart {
+                        didLogDownloadStart = true
+                        if resumedBytes > 0 {
+                            logAction(
+                                category: "download.resumed",
+                                message: "Resumed \(plan.request.id) at \(resumedBytes) of \(totalBytes) bytes."
+                            )
+                        } else {
+                            logAction(
+                                category: "download.started",
+                                message: "Started \(plan.request.id) with expected size \(totalBytes) bytes."
+                            )
+                        }
+                    }
                     if resumedBytes > 0 {
                         statusText = "Resuming download (\(resumedBytes / 1024)KB already downloaded)"
                     } else {
@@ -118,6 +144,10 @@ final class InstallerOnboardingViewModel: ObservableObject {
                 case .completed:
                     progress = 1
                     statusText = "Download complete. Verifying artifact..."
+                    logAction(
+                        category: "download.completed",
+                        message: "Completed \(plan.request.id). Starting verification."
+                    )
                     completed = true
                 }
             }
@@ -125,17 +155,33 @@ final class InstallerOnboardingViewModel: ObservableObject {
             if completed {
                 do {
                     try artifactVerifier.verify(fileURL: plan.request.destinationURL, against: plan.expectedChecksum)
+                    logAction(
+                        category: "verification.passed",
+                        message: "Checksum passed for \(plan.request.destinationURL.lastPathComponent)."
+                    )
                 } catch {
+                    logAction(
+                        category: "verification.failed",
+                        message: error.localizedDescription
+                    )
                     try? fileManager.removeItem(at: plan.request.destinationURL)
                     throw error
                 }
 
                 try persistInstalledModelMetadata(plan)
+                logAction(
+                    category: "model.persisted",
+                    message: "Persisted installed model metadata for \(plan.candidate.id)."
+                )
                 statusText = "Verification passed. Setup complete."
                 isInstalling = false
                 step = .completed
                 installTask = nil
                 activeDownloadID = nil
+                logAction(
+                    category: "install.completed",
+                    message: "Install completed for \(plan.candidate.id)."
+                )
             } else if Task.isCancelled {
                 throw CancellationError()
             } else {
@@ -147,12 +193,14 @@ final class InstallerOnboardingViewModel: ObservableObject {
             statusText = "Setup cancelled."
             installTask = nil
             activeDownloadID = nil
+            logAction(category: "install.cancelled", message: "Install was cancelled by the user.")
         } catch {
             isInstalling = false
             step = .failed(message: "Setup failed: \(error.localizedDescription)")
             statusText = "Setup failed."
             installTask = nil
             activeDownloadID = nil
+            logAction(category: "install.failed", message: error.localizedDescription)
         }
     }
 
@@ -264,6 +312,11 @@ final class InstallerOnboardingViewModel: ObservableObject {
         let memory = recommendation.minimumRequiredMemoryGB.map { "\($0)GB RAM" } ?? "unknown RAM"
         let disk = recommendation.minimumRequiredDiskGB.map { "\($0)GB free disk" } ?? "unknown disk space"
         return "This Mac currently does not meet minimum requirements (\(memory), \(disk))."
+    }
+
+    private func logAction(category: String, message: String) {
+        let entry = InstallerActionLogEntry(category: category, message: message)
+        try? actionLogStore.append(entry)
     }
 }
 
