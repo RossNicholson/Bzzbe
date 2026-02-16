@@ -1,6 +1,7 @@
 #if canImport(SwiftUI)
 @testable import BzzbeApp
 import CoreHardware
+import CoreInference
 import CoreInstaller
 import Foundation
 import Testing
@@ -81,6 +82,112 @@ func installerOnboardingAllowsManualOverride() {
     #expect(viewModel.selectedCandidateID == small.id)
 }
 
+@MainActor
+@Test("InstallerOnboardingViewModel completes install after successful runtime pull")
+func installerOnboardingCompletesAfterRuntimePull() async throws {
+    let candidate = ModelCandidate(
+        id: "qwen3:8b",
+        displayName: "Qwen 3 8B",
+        approximateDownloadSizeGB: 5.2,
+        minimumMemoryGB: 16,
+        tier: .balanced
+    )
+    let recommendation = InstallRecommendation(
+        status: .ready,
+        tier: candidate.tier.rawValue,
+        candidate: candidate,
+        rationale: "Best fit for detected hardware."
+    )
+    let service = StubInstallerService(
+        recommendation: recommendation,
+        candidates: [candidate]
+    )
+    let profile = CapabilityProfile(architecture: "arm64", memoryGB: 16, freeDiskGB: 80, performanceCores: 8)
+    let puller = StubRuntimeModelPuller(
+        events: [
+            .started(modelID: candidate.id),
+            .progress(completedBytes: 5, totalBytes: 10, status: "downloading"),
+            .completed
+        ]
+    )
+    let runtimeClient = StubInferenceClient()
+    let installedModelStore = InMemoryInstalledModelStore()
+    let actionLogStore = InMemoryInstallerActionLogStore()
+
+    let viewModel = InstallerOnboardingViewModel(
+        profile: profile,
+        installerService: service,
+        runtimeModelPuller: puller,
+        runtimeClient: runtimeClient,
+        installedModelStore: installedModelStore,
+        actionLogStore: actionLogStore
+    )
+
+    viewModel.startInstall()
+    try await eventually {
+        if case .completed = viewModel.step {
+            return true
+        }
+        return false
+    }
+
+    #expect(installedModelStore.savedRecord?.modelID == candidate.id)
+    #expect(installedModelStore.savedRecord?.artifactPath == "ollama://\(candidate.id)")
+    #expect(installedModelStore.savedRecord?.checksumSHA256 == "runtime-managed")
+}
+
+@MainActor
+@Test("InstallerOnboardingViewModel fails install when runtime pull is unavailable")
+func installerOnboardingFailsWhenRuntimePullUnavailable() async throws {
+    let candidate = ModelCandidate(
+        id: "qwen3:8b",
+        displayName: "Qwen 3 8B",
+        approximateDownloadSizeGB: 5.2,
+        minimumMemoryGB: 16,
+        tier: .balanced
+    )
+    let recommendation = InstallRecommendation(
+        status: .ready,
+        tier: candidate.tier.rawValue,
+        candidate: candidate,
+        rationale: "Best fit for detected hardware."
+    )
+    let service = StubInstallerService(
+        recommendation: recommendation,
+        candidates: [candidate]
+    )
+    let profile = CapabilityProfile(architecture: "arm64", memoryGB: 16, freeDiskGB: 80, performanceCores: 8)
+    let puller = StubRuntimeModelPuller(
+        events: [],
+        error: RuntimeModelPullError.unavailable("Connection refused")
+    )
+
+    let viewModel = InstallerOnboardingViewModel(
+        profile: profile,
+        installerService: service,
+        runtimeModelPuller: puller,
+        runtimeClient: StubInferenceClient(),
+        installedModelStore: InMemoryInstalledModelStore(),
+        actionLogStore: InMemoryInstallerActionLogStore()
+    )
+
+    viewModel.startInstall()
+    try await eventually {
+        if case .failed = viewModel.step {
+            return true
+        }
+        return false
+    }
+
+    let errorMessage: String
+    if case let .failed(message) = viewModel.step {
+        errorMessage = message
+    } else {
+        errorMessage = ""
+    }
+    #expect(errorMessage.contains("Local runtime unavailable"))
+}
+
 private struct StubInstallerService: Installing {
     let recommendation: InstallRecommendation
     let candidates: [ModelCandidate]
@@ -97,4 +204,108 @@ private struct StubInstallerService: Installing {
         candidates
     }
 }
+
+private actor StubRuntimeModelPuller: RuntimeModelPulling {
+    private let events: [RuntimeModelPullEvent]
+    private let error: Error?
+
+    init(events: [RuntimeModelPullEvent], error: Error? = nil) {
+        self.events = events
+        self.error = error
+    }
+
+    func pullModel(_ modelID: String) async -> AsyncThrowingStream<RuntimeModelPullEvent, Error> {
+        AsyncThrowingStream { continuation in
+            for event in events {
+                continuation.yield(event)
+            }
+            if let error {
+                continuation.finish(throwing: error)
+            } else {
+                continuation.finish()
+            }
+        }
+    }
+
+    func cancelCurrentPull() async {}
+}
+
+private actor StubInferenceClient: InferenceClient {
+    func loadModel(_ model: InferenceModelDescriptor) async throws {}
+
+    func streamCompletion(_ request: InferenceRequest) async -> AsyncThrowingStream<InferenceEvent, Error> {
+        AsyncThrowingStream { continuation in
+            continuation.finish()
+        }
+    }
+
+    func cancelCurrentRequest() async {}
+}
+
+private final class InMemoryInstalledModelStore: InstalledModelStoring {
+    private(set) var savedRecord: InstalledModelRecord?
+
+    func save(record: InstalledModelRecord) throws {
+        savedRecord = record
+    }
+
+    func load() throws -> InstalledModelRecord {
+        guard let savedRecord else {
+            throw InstalledModelStoreError.notFound
+        }
+        return savedRecord
+    }
+
+    func loadIfAvailable() throws -> InstalledModelRecord? {
+        savedRecord
+    }
+
+    func clear() throws {
+        savedRecord = nil
+    }
+}
+
+private final class InMemoryInstallerActionLogStore: @unchecked Sendable, InstallerActionLogging {
+    private var entries: [InstallerActionLogEntry] = []
+
+    func append(_ entry: InstallerActionLogEntry) throws {
+        entries.append(entry)
+    }
+
+    func listEntries(limit: Int?) throws -> [InstallerActionLogEntry] {
+        let sorted = entries.sorted { lhs, rhs in
+            if lhs.timestamp != rhs.timestamp {
+                return lhs.timestamp > rhs.timestamp
+            }
+            return lhs.id.uuidString > rhs.id.uuidString
+        }
+        guard let limit, limit >= 0 else { return sorted }
+        return Array(sorted.prefix(limit))
+    }
+
+    func exportText(limit: Int?) throws -> String {
+        let listed = try listEntries(limit: limit)
+        return listed.map(\.message).joined(separator: "\n")
+    }
+}
+
+@MainActor
+private func eventually(
+    timeout: Duration = .seconds(2),
+    condition: @MainActor @escaping () -> Bool
+) async throws {
+    let clock = ContinuousClock()
+    let deadline = clock.now.advanced(by: timeout)
+
+    while clock.now < deadline {
+        if condition() {
+            return
+        }
+        try await Task.sleep(for: .milliseconds(10))
+    }
+
+    throw PollingTimeoutError()
+}
+
+private struct PollingTimeoutError: Error {}
 #endif
