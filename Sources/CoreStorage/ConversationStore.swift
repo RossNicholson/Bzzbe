@@ -261,11 +261,17 @@ public final class SQLiteConversationStore: @unchecked Sendable, ConversationSto
         defer { sqlite3_finalize(statement) }
 
         var result: [Conversation] = []
-        while sqlite3_step(statement) == SQLITE_ROW {
-            result.append(conversation(from: statement))
+        while true {
+            let stepResult = sqlite3_step(statement)
+            switch stepResult {
+            case SQLITE_ROW:
+                result.append(conversation(from: statement))
+            case SQLITE_DONE:
+                return result
+            default:
+                throw ConversationStoreError.step(Self.errorMessage(for: db))
+            }
         }
-        try validateStatementCompletion(statement)
-        return result
     }
 
     public func fetchConversation(id: String) async throws -> Conversation? {
@@ -369,12 +375,17 @@ public final class SQLiteConversationStore: @unchecked Sendable, ConversationSto
         sqlite3_bind_text(statement, 1, conversationID, -1, sqliteTransientDestructor)
 
         var result: [ConversationMessage] = []
-        while sqlite3_step(statement) == SQLITE_ROW {
-            result.append(try message(from: statement))
+        while true {
+            let stepResult = sqlite3_step(statement)
+            switch stepResult {
+            case SQLITE_ROW:
+                result.append(try message(from: statement))
+            case SQLITE_DONE:
+                return result
+            default:
+                throw ConversationStoreError.step(Self.errorMessage(for: db))
+            }
         }
-        try validateStatementCompletion(statement)
-
-        return result
     }
 
     private func updateConversationTimestamp(conversationID: String, at date: Date) throws {
@@ -419,16 +430,6 @@ public final class SQLiteConversationStore: @unchecked Sendable, ConversationSto
 
     private func stepExpectingDone(_ statement: OpaquePointer) throws {
         guard sqlite3_step(statement) == SQLITE_DONE else {
-            throw ConversationStoreError.step(Self.errorMessage(for: db))
-        }
-    }
-
-    private func validateStatementCompletion(_ statement: OpaquePointer) throws {
-        guard sqlite3_errcode(db) == SQLITE_OK || sqlite3_errcode(db) == SQLITE_DONE else {
-            throw ConversationStoreError.step(Self.errorMessage(for: db))
-        }
-        let result = sqlite3_step(statement)
-        guard result == SQLITE_DONE else {
             throw ConversationStoreError.step(Self.errorMessage(for: db))
         }
     }
