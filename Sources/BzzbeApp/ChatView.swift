@@ -1,5 +1,6 @@
 #if canImport(SwiftUI)
 import CoreInference
+import CoreStorage
 import Foundation
 import SwiftUI
 
@@ -31,12 +32,16 @@ final class ChatViewModel: ObservableObject {
     let model: InferenceModelDescriptor
 
     private let inferenceClient: any InferenceClient
+    private let conversationStore: any ConversationStoring
     private var streamTask: Task<Void, Never>?
     private var assistantMessageID: UUID?
     private var activeRequestID: UUID?
+    private var activeConversationID: String?
+    private var conversationIDByRequestID: [UUID: String] = [:]
 
     init(
         inferenceClient: any InferenceClient = MockInferenceClient(),
+        conversationStore: any ConversationStoring = ChatViewModel.defaultConversationStore(),
         model: InferenceModelDescriptor = InferenceModelDescriptor(
             identifier: "mock.qwen2.5-3b",
             displayName: "Mock Qwen 2.5 3B",
@@ -44,7 +49,12 @@ final class ChatViewModel: ObservableObject {
         )
     ) {
         self.inferenceClient = inferenceClient
+        self.conversationStore = conversationStore
         self.model = model
+
+        Task {
+            await restoreLatestConversationIfAvailable()
+        }
     }
 
     var canSend: Bool {
@@ -69,6 +79,16 @@ final class ChatViewModel: ObservableObject {
 
     func stopStreaming() {
         guard isStreaming else { return }
+
+        let requestID = activeRequestID
+        let pendingAssistantID = assistantMessageID
+        if let requestID {
+            persistAssistantMessageIfNeeded(for: requestID, assistantMessageID: pendingAssistantID)
+        }
+
+        if let requestID {
+            conversationIDByRequestID[requestID] = nil
+        }
         activeRequestID = nil
         assistantMessageID = nil
         streamTask?.cancel()
@@ -103,6 +123,8 @@ final class ChatViewModel: ObservableObject {
             guard let self else { return }
 
             do {
+                await self.persistUserPrompt(prompt, requestID: requestID)
+
                 try await self.inferenceClient.loadModel(self.model)
                 let stream = await self.inferenceClient.streamCompletion(request)
                 for try await event in stream {
@@ -149,6 +171,10 @@ final class ChatViewModel: ObservableObject {
 
     private func finishStreamingIfNeeded(for requestID: UUID) {
         guard isActiveRequest(requestID) else { return }
+
+        let pendingAssistantID = assistantMessageID
+        persistAssistantMessageIfNeeded(for: requestID, assistantMessageID: pendingAssistantID)
+
         isStreaming = false
         streamTask = nil
         assistantMessageID = nil
@@ -163,6 +189,89 @@ final class ChatViewModel: ObservableObject {
 
     private func isActiveRequest(_ requestID: UUID) -> Bool {
         activeRequestID == requestID
+    }
+
+    private func persistUserPrompt(_ prompt: String, requestID: UUID) async {
+        do {
+            let conversationID = try await ensureConversationID(forPrompt: prompt)
+            conversationIDByRequestID[requestID] = conversationID
+            _ = try await conversationStore.addMessage(
+                conversationID: conversationID,
+                role: .user,
+                content: prompt
+            )
+        } catch {
+            errorMessage = "Failed to save conversation. \(error.localizedDescription)"
+        }
+    }
+
+    private func ensureConversationID(forPrompt prompt: String) async throws -> String {
+        if let activeConversationID {
+            return activeConversationID
+        }
+
+        let createdConversation = try await conversationStore.createConversation(title: conversationTitle(from: prompt))
+        activeConversationID = createdConversation.id
+        return createdConversation.id
+    }
+
+    private func persistAssistantMessageIfNeeded(for requestID: UUID, assistantMessageID: UUID?) {
+        guard let conversationID = conversationIDByRequestID[requestID] else { return }
+        defer { conversationIDByRequestID[requestID] = nil }
+
+        guard let assistantMessageID else { return }
+        guard let assistantMessage = messages.first(where: { $0.id == assistantMessageID }) else { return }
+        let trimmedContent = assistantMessage.content.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmedContent.isEmpty else { return }
+
+        Task {
+            _ = try? await conversationStore.addMessage(
+                conversationID: conversationID,
+                role: .assistant,
+                content: trimmedContent
+            )
+        }
+    }
+
+    private func restoreLatestConversationIfAvailable() async {
+        guard messages.isEmpty else { return }
+
+        do {
+            guard let latestConversation = try await conversationStore.listConversations().first else { return }
+            let storedMessages = try await conversationStore.listMessages(conversationID: latestConversation.id)
+
+            guard messages.isEmpty else { return }
+            activeConversationID = latestConversation.id
+            messages = storedMessages.map(chatMessage(from:))
+        } catch {
+            errorMessage = "Failed to restore previous conversation. \(error.localizedDescription)"
+        }
+    }
+
+    private func chatMessage(from message: ConversationMessage) -> Message {
+        let role: Message.Role
+        switch message.role {
+        case .user:
+            role = .user
+        case .assistant, .system:
+            role = .assistant
+        }
+
+        return Message(role: role, content: message.content)
+    }
+
+    private func conversationTitle(from prompt: String) -> String {
+        let trimmed = prompt.trimmingCharacters(in: .whitespacesAndNewlines)
+        let firstLine = trimmed.split(whereSeparator: \.isNewline).first.map(String.init) ?? trimmed
+        guard firstLine.count > 60 else { return firstLine.isEmpty ? "New Conversation" : firstLine }
+        return String(firstLine.prefix(60))
+    }
+
+    private static func defaultConversationStore() -> any ConversationStoring {
+        if let sqliteStore = try? SQLiteConversationStore.defaultStore() {
+            return sqliteStore
+        }
+        return InMemoryConversationStore()
     }
 }
 
