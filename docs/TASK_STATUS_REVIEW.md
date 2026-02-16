@@ -40,7 +40,7 @@ Based on `docs/JOB_LIST.md`, the following are complete:
 
 ### P1 tasks still open (alpha quality and polish)
 
-- **JOB-016** — Alpha performance harness + report (in progress: harness + baseline report committed; real runtime two-tier data still pending).
+- **JOB-016** — Alpha performance harness + report (in progress: harness now captures host metadata and runtime-process RSS with baseline report; real runtime two-tier data still pending).
 
 ### P2 tasks still open
 

@@ -30,7 +30,7 @@ This job list turns the Phase 1 backlog into assignable work items with sequenci
 - [x] JOB-013 — Runtime integration (Ollama-compatible local streaming client + cancellation/error handling + protocol-level tests; chat defaults to runtime client).
 - [x] JOB-014 — Privacy defaults and consent messaging (Settings now includes local-first disclosure with telemetry/diagnostics toggles defaulting to off and persistence tests).
 - [x] JOB-015 — Installer/model action log (JSON-backed action logging wired through installer flow with Settings log viewer and text export).
-- [ ] JOB-016 — Alpha performance harness + report (in progress: perf CLI + baseline report landed; real runtime two-tier measurements are tracked as open defects in `docs/reports/alpha-01.md`).
+- [ ] JOB-016 — Alpha performance harness + report (in progress: perf CLI now records host metadata and runtime-process RSS with baseline report; real runtime two-tier measurements are tracked as open defects in `docs/reports/alpha-01.md`).
 - [x] JOB-017 — Failure-recovery hardening (chat now surfaces runtime-unavailable/missing-model recovery hints with one-click retry or setup rerun, with recovery tests).
 
 ---
