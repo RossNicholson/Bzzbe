@@ -128,6 +128,9 @@ struct ModelsView: View {
                     Text("Tier: \(selected.tier.rawValue)")
                     Text("Approximate download: \(selected.approximateDownloadSizeGB, specifier: "%.1f")GB")
                     Text("Minimum memory: \(selected.minimumMemoryGB)GB")
+                    Text("Install source: \(installSourceSummary(for: selected))")
+                        .font(.footnote)
+                        .foregroundStyle(.secondary)
                 } else {
                     Text("No compatible model profile is currently available for this hardware.")
                         .foregroundStyle(.secondary)
@@ -223,6 +226,15 @@ struct ModelsView: View {
                             Text("Tier: \(candidate.tier.rawValue) · \(candidate.approximateDownloadSizeGB, specifier: "%.1f")GB")
                                 .font(.caption)
                                 .foregroundStyle(.secondary)
+                            Text(installSourceSummary(for: candidate))
+                                .font(.caption2)
+                                .foregroundStyle(.secondary)
+                            if case let .providerArtifact(source) = candidate.installStrategy {
+                                Text(source.artifactURL.absoluteString)
+                                    .font(.caption2)
+                                    .foregroundStyle(.secondary)
+                                    .textSelection(.enabled)
+                            }
                         }
 
                         if candidate.id != viewModel.compatibleCandidates.last?.id {
@@ -269,6 +281,15 @@ struct ModelsView: View {
         }
         if let firstCompatible = viewModel.compatibleCandidates.first?.id {
             preferredModelID = firstCompatible
+        }
+    }
+
+    private func installSourceSummary(for candidate: ModelCandidate) -> String {
+        switch candidate.installStrategy {
+        case .runtimeRegistryPull:
+            return "Local runtime registry pull"
+        case let .providerArtifact(source):
+            return "Direct provider download (\(source.providerName))"
         }
     }
 }

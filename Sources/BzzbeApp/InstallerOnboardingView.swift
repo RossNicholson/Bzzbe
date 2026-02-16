@@ -37,25 +37,41 @@ final class InstallerOnboardingViewModel: ObservableObject {
 
     private let installerService: Installing
     private let runtimeModelPuller: RuntimeModelPulling
+    private let runtimeModelImporter: RuntimeModelImporting
+    private let artifactDownloader: ArtifactDownloading
+    private let artifactVerifier: ArtifactVerifying
     private let runtimeClient: any InferenceClient
     private let installedModelStore: InstalledModelStoring
     private let actionLogStore: InstallerActionLogging
+    private let fileManager: FileManager
+    private let providerArtifactsDirectoryURL: URL
     private var installTask: Task<Void, Never>?
+    private var activeProviderDownloadID: String?
 
     init(
         profile: CapabilityProfile,
         installerService: Installing = InstallerService(),
         runtimeModelPuller: RuntimeModelPulling = OllamaModelPullClient(),
+        runtimeModelImporter: RuntimeModelImporting = OllamaModelImportClient(),
+        artifactDownloader: ArtifactDownloading = ResumableArtifactDownloadManager(),
+        artifactVerifier: ArtifactVerifying = ArtifactVerifier(),
         runtimeClient: any InferenceClient = LocalRuntimeInferenceClient(),
         installedModelStore: InstalledModelStoring = JSONInstalledModelStore.defaultStore(),
-        actionLogStore: InstallerActionLogging = JSONInstallerActionLogStore.defaultStore()
+        actionLogStore: InstallerActionLogging = JSONInstallerActionLogStore.defaultStore(),
+        fileManager: FileManager = .default,
+        providerArtifactsDirectoryURL: URL = InstallerOnboardingViewModel.defaultProviderArtifactsDirectoryURL()
     ) {
         self.profile = profile
         self.installerService = installerService
         self.runtimeModelPuller = runtimeModelPuller
+        self.runtimeModelImporter = runtimeModelImporter
+        self.artifactDownloader = artifactDownloader
+        self.artifactVerifier = artifactVerifier
         self.runtimeClient = runtimeClient
         self.installedModelStore = installedModelStore
         self.actionLogStore = actionLogStore
+        self.fileManager = fileManager
+        self.providerArtifactsDirectoryURL = providerArtifactsDirectoryURL
         let recommendation = installerService.recommendedInstall(for: profile)
         self.recommendation = recommendation
         let availableCandidates = installerService.compatibleCandidates(for: profile)
@@ -113,8 +129,15 @@ final class InstallerOnboardingViewModel: ObservableObject {
         statusText = "Cancelling setup..."
         installTask?.cancel()
         installTask = nil
+
+        if let activeProviderDownloadID {
+            artifactDownloader.cancelDownload(id: activeProviderDownloadID)
+            self.activeProviderDownloadID = nil
+        }
+
         Task {
             await runtimeModelPuller.cancelCurrentPull()
+            await runtimeModelImporter.cancelCurrentImport()
         }
     }
 
@@ -133,86 +156,224 @@ final class InstallerOnboardingViewModel: ObservableObject {
                 category: "install.started",
                 message: "Starting install for \(candidate.id) (\(candidate.tier.rawValue))."
             )
-            var completed = false
-            var didLogPullStart = false
+            let installedArtifactMetadata = try await installCandidateArtifact(candidate)
 
-            let stream = await runtimeModelPuller.pullModel(candidate.id)
-            for try await event in stream {
-                try Task.checkCancellation()
-                switch event {
-                case .started:
-                    progress = 0
-                    statusText = "Starting model download..."
-                    if !didLogPullStart {
-                        didLogPullStart = true
-                        logAction(
-                            category: "runtime.pull.started",
-                            message: "Started runtime model pull for \(candidate.id)."
-                        )
-                    }
-                case let .status(message):
-                    statusText = message
-                case let .progress(completedBytes, totalBytes, status):
-                    progress = fraction(numerator: completedBytes, denominator: totalBytes)
-                    if let status, !status.isEmpty {
-                        statusText = status
-                    } else {
-                        statusText = "Downloading model package..."
-                    }
-                case .completed:
-                    progress = 1
-                    statusText = "Model download complete. Verifying runtime..."
-                    logAction(
-                        category: "runtime.pull.completed",
-                        message: "Runtime reported model pull complete for \(candidate.id)."
-                    )
-                    completed = true
-                }
-            }
+            statusText = "Verifying local runtime and model availability..."
+            logAction(
+                category: "runtime.validation.started",
+                message: "Checking runtime/model availability for \(candidate.id)."
+            )
+            try await ensureRuntimeModelAvailable(for: candidate)
+            logAction(
+                category: "runtime.validation.passed",
+                message: "Runtime confirmed model availability for \(candidate.id)."
+            )
 
-            if completed {
-                statusText = "Verifying local runtime and model availability..."
-                logAction(
-                    category: "runtime.validation.started",
-                    message: "Checking runtime/model availability for \(candidate.id)."
-                )
-                try await ensureRuntimeModelAvailable(for: candidate)
-                logAction(
-                    category: "runtime.validation.passed",
-                    message: "Runtime confirmed model availability for \(candidate.id)."
-                )
-
-                try persistInstalledModelMetadata(for: candidate)
-                logAction(
-                    category: "model.persisted",
-                    message: "Persisted installed model metadata for \(candidate.id)."
-                )
-                statusText = "Setup complete."
-                isInstalling = false
-                step = .completed
-                installTask = nil
-                logAction(
-                    category: "install.completed",
-                    message: "Install completed for \(candidate.id)."
-                )
-            } else if Task.isCancelled {
-                throw CancellationError()
-            } else {
-                throw InstallationFlowError.downloadEndedUnexpectedly
-            }
+            try persistInstalledModelMetadata(
+                for: candidate,
+                artifactPath: installedArtifactMetadata.artifactPath,
+                checksumSHA256: installedArtifactMetadata.checksumSHA256
+            )
+            logAction(
+                category: "model.persisted",
+                message: "Persisted installed model metadata for \(candidate.id)."
+            )
+            statusText = "Setup complete."
+            isInstalling = false
+            step = .completed
+            installTask = nil
+            logAction(
+                category: "install.completed",
+                message: "Install completed for \(candidate.id)."
+            )
         } catch is CancellationError {
             isInstalling = false
             step = .failed(message: "Setup was cancelled. You can retry safely.")
             statusText = "Setup cancelled."
             installTask = nil
+            activeProviderDownloadID = nil
             logAction(category: "install.cancelled", message: "Install was cancelled by the user.")
         } catch {
             isInstalling = false
             step = .failed(message: "Setup failed: \(error.localizedDescription)")
             statusText = "Setup failed."
             installTask = nil
+            activeProviderDownloadID = nil
             logAction(category: "install.failed", message: error.localizedDescription)
         }
+    }
+
+    private struct InstalledArtifactMetadata {
+        let artifactPath: String
+        let checksumSHA256: String
+    }
+
+    private func installCandidateArtifact(_ candidate: ModelCandidate) async throws -> InstalledArtifactMetadata {
+        switch candidate.installStrategy {
+        case .runtimeRegistryPull:
+            try await installViaRuntimeRegistryPull(candidate)
+            return InstalledArtifactMetadata(
+                artifactPath: "ollama://\(candidate.id)",
+                checksumSHA256: "runtime-managed"
+            )
+        case let .providerArtifact(source):
+            return try await installViaProviderArtifact(candidate: candidate, source: source)
+        }
+    }
+
+    private func installViaRuntimeRegistryPull(_ candidate: ModelCandidate) async throws {
+        var completed = false
+        var didLogPullStart = false
+
+        let stream = await runtimeModelPuller.pullModel(candidate.id)
+        for try await event in stream {
+            try Task.checkCancellation()
+            switch event {
+            case .started:
+                progress = 0
+                statusText = "Starting model download..."
+                if !didLogPullStart {
+                    didLogPullStart = true
+                    logAction(
+                        category: "runtime.pull.started",
+                        message: "Started runtime model pull for \(candidate.id)."
+                    )
+                }
+            case let .status(message):
+                statusText = message
+            case let .progress(completedBytes, totalBytes, status):
+                progress = fraction(numerator: completedBytes, denominator: totalBytes)
+                if let status, !status.isEmpty {
+                    statusText = status
+                } else {
+                    statusText = "Downloading model package..."
+                }
+            case .completed:
+                progress = 1
+                statusText = "Model download complete. Verifying runtime..."
+                logAction(
+                    category: "runtime.pull.completed",
+                    message: "Runtime reported model pull complete for \(candidate.id)."
+                )
+                completed = true
+            }
+        }
+
+        if !completed {
+            if Task.isCancelled {
+                throw CancellationError()
+            }
+            throw InstallationFlowError.downloadEndedUnexpectedly
+        }
+    }
+
+    private func installViaProviderArtifact(
+        candidate: ModelCandidate,
+        source: ProviderArtifactSource
+    ) async throws -> InstalledArtifactMetadata {
+        let artifactFileURL = try destinationArtifactFileURL(for: candidate, source: source)
+        let downloadRequestID = "provider.\(candidate.id)"
+        activeProviderDownloadID = downloadRequestID
+
+        logAction(
+            category: "provider.download.started",
+            message: "Downloading \(candidate.id) from \(source.providerName)."
+        )
+
+        let request = ArtifactDownloadRequest(
+            id: downloadRequestID,
+            sourceURL: source.artifactURL,
+            destinationURL: artifactFileURL
+        )
+        let stream = artifactDownloader.startDownload(request)
+        var didCompleteDownload = false
+
+        for try await event in stream {
+            try Task.checkCancellation()
+            switch event {
+            case let .started(resumedBytes, totalBytes):
+                progress = fraction(numerator: resumedBytes, denominator: totalBytes)
+                if resumedBytes > 0 {
+                    statusText = "Resuming provider download..."
+                } else {
+                    statusText = "Downloading model from provider..."
+                }
+            case let .progress(bytesWritten, totalBytes):
+                progress = fraction(numerator: bytesWritten, denominator: totalBytes)
+                statusText = "Downloading model from provider..."
+            case .completed:
+                progress = 1
+                statusText = "Provider download complete."
+                didCompleteDownload = true
+            }
+        }
+        activeProviderDownloadID = nil
+
+        if !didCompleteDownload {
+            if Task.isCancelled {
+                throw CancellationError()
+            }
+            throw InstallationFlowError.downloadEndedUnexpectedly
+        }
+
+        logAction(
+            category: "provider.download.completed",
+            message: "Downloaded provider artifact for \(candidate.id) to \(artifactFileURL.path)."
+        )
+
+        let computedChecksum = try artifactVerifier.checksum(for: artifactFileURL, algorithm: .sha256)
+        if let expectedChecksum = source.checksumSHA256 {
+            let expected = try ArtifactChecksum(value: expectedChecksum)
+            try artifactVerifier.verify(fileURL: artifactFileURL, against: expected)
+            logAction(
+                category: "provider.verify.passed",
+                message: "Checksum verified for \(candidate.id)."
+            )
+        } else {
+            logAction(
+                category: "provider.verify.skipped",
+                message: "No checksum configured for \(candidate.id); recorded computed SHA-256."
+            )
+        }
+
+        statusText = "Registering downloaded model in local runtime..."
+        let importStream = await runtimeModelImporter.importModel(
+            modelID: candidate.id,
+            artifactFileURL: artifactFileURL
+        )
+        var importCompleted = false
+        for try await event in importStream {
+            try Task.checkCancellation()
+            switch event {
+            case .started:
+                statusText = "Importing downloaded model..."
+                logAction(
+                    category: "runtime.import.started",
+                    message: "Started runtime import for \(candidate.id)."
+                )
+            case let .status(message):
+                statusText = message
+            case .completed:
+                importCompleted = true
+            }
+        }
+
+        if !importCompleted {
+            if Task.isCancelled {
+                throw CancellationError()
+            }
+            throw InstallationFlowError.importEndedUnexpectedly
+        }
+
+        logAction(
+            category: "runtime.import.completed",
+            message: "Runtime import completed for \(candidate.id)."
+        )
+
+        return InstalledArtifactMetadata(
+            artifactPath: artifactFileURL.path,
+            checksumSHA256: computedChecksum
+        )
     }
 
     private func ensureRuntimeModelAvailable(for candidate: ModelCandidate) async throws {
@@ -233,7 +394,7 @@ final class InstallerOnboardingViewModel: ObservableObject {
             case let .runtime(details):
                 if isMissingModelError(details) {
                     throw InstallationFlowError.modelMissing(
-                        "Local runtime did not report model '\(candidate.id)' as installed after pull. Retry setup."
+                        "Local runtime did not report model '\(candidate.id)' as installed after setup. Retry setup."
                     )
                 }
                 throw InstallationFlowError.runtimeUnavailable(error.localizedDescription)
@@ -252,15 +413,62 @@ final class InstallerOnboardingViewModel: ObservableObject {
             || normalized.contains("unknown model")
     }
 
-    private func persistInstalledModelMetadata(for candidate: ModelCandidate) throws {
+    private func persistInstalledModelMetadata(
+        for candidate: ModelCandidate,
+        artifactPath: String,
+        checksumSHA256: String
+    ) throws {
         let record = InstalledModelRecord(
             modelID: candidate.id,
             tier: candidate.tier.rawValue,
-            artifactPath: "ollama://\(candidate.id)",
-            checksumSHA256: "runtime-managed",
+            artifactPath: artifactPath,
+            checksumSHA256: checksumSHA256,
             version: "1"
         )
         try installedModelStore.save(record: record)
+    }
+
+    private func destinationArtifactFileURL(
+        for candidate: ModelCandidate,
+        source: ProviderArtifactSource
+    ) throws -> URL {
+        try fileManager.createDirectory(at: providerArtifactsDirectoryURL, withIntermediateDirectories: true)
+
+        let fileName: String
+        let sourceFileName = source.artifactURL.lastPathComponent
+        if sourceFileName.isEmpty {
+            fileName = sanitizedFileName(candidate.id) + ".gguf"
+        } else {
+            fileName = sanitizedFileName(sourceFileName)
+        }
+
+        return providerArtifactsDirectoryURL
+            .appendingPathComponent(candidate.id.replacingOccurrences(of: ":", with: "-"), isDirectory: true)
+            .appendingPathComponent(fileName, isDirectory: false)
+    }
+
+    private func sanitizedFileName(_ value: String) -> String {
+        let allowed = CharacterSet.alphanumerics.union(CharacterSet(charactersIn: "._-"))
+        let mappedScalars = value.unicodeScalars.map { scalar -> String in
+            if allowed.contains(scalar) {
+                return String(scalar)
+            }
+            return "-"
+        }
+        let candidate = mappedScalars.joined()
+        if candidate.isEmpty {
+            return "artifact.gguf"
+        }
+        return candidate
+    }
+
+    private static func defaultProviderArtifactsDirectoryURL() -> URL {
+        let base = FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask).first
+            ?? FileManager.default.temporaryDirectory
+        return base
+            .appendingPathComponent("Bzzbe", isDirectory: true)
+            .appendingPathComponent("models", isDirectory: true)
+            .appendingPathComponent("provider-artifacts", isDirectory: true)
     }
 
     private func fraction(numerator: Int64, denominator: Int64) -> Double {
@@ -284,6 +492,7 @@ private enum InstallationFlowError: Error {
     case runtimeUnavailable(String)
     case modelMissing(String)
     case downloadEndedUnexpectedly
+    case importEndedUnexpectedly
 }
 
 extension InstallationFlowError: LocalizedError {
@@ -295,6 +504,8 @@ extension InstallationFlowError: LocalizedError {
             return message
         case .downloadEndedUnexpectedly:
             return "Model pull ended unexpectedly before completion."
+        case .importEndedUnexpectedly:
+            return "Model import ended unexpectedly before completion."
         }
     }
 }
@@ -382,6 +593,9 @@ struct InstallerOnboardingView: View {
                             Text("Tier: \(viewModel.recommendation.tier ?? "unknown")")
                             Text("Approximate download: \(candidate.approximateDownloadSizeGB, specifier: "%.1f")GB")
                             Text("Minimum memory: \(candidate.minimumMemoryGB)GB")
+                            Text("Install source: \(installSourceSummary(candidate))")
+                                .font(.footnote)
+                                .foregroundStyle(.secondary)
                             Text(viewModel.recommendation.rationale)
                                 .foregroundStyle(.secondary)
                         }
@@ -420,6 +634,9 @@ struct InstallerOnboardingView: View {
                             Text("Tier: \(selectedCandidate.tier.rawValue)")
                             Text("Approximate download: \(selectedCandidate.approximateDownloadSizeGB, specifier: "%.1f")GB")
                             Text("Minimum memory: \(selectedCandidate.minimumMemoryGB)GB")
+                            Text("Install source: \(installSourceSummary(selectedCandidate))")
+                                .font(.footnote)
+                                .foregroundStyle(.secondary)
                             if !viewModel.isUsingRecommendedCandidate,
                                let recommended = viewModel.recommendation.candidate {
                                 Text("Override active. Hardware recommendation is \(recommended.displayName).")
@@ -453,6 +670,15 @@ struct InstallerOnboardingView: View {
             return "\(candidate.displayName) (Recommended)"
         }
         return candidate.displayName
+    }
+
+    private func installSourceSummary(_ candidate: ModelCandidate) -> String {
+        switch candidate.installStrategy {
+        case .runtimeRegistryPull:
+            return "Runtime registry pull"
+        case let .providerArtifact(source):
+            return "Provider download (\(source.providerName))"
+        }
     }
 
     private var installingStep: some View {

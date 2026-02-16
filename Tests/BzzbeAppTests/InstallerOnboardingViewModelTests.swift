@@ -188,6 +188,80 @@ func installerOnboardingFailsWhenRuntimePullUnavailable() async throws {
     #expect(errorMessage.contains("Local runtime unavailable"))
 }
 
+@MainActor
+@Test("InstallerOnboardingViewModel installs provider artifact and imports into runtime")
+func installerOnboardingInstallsProviderArtifact() async throws {
+    let providerSource = ProviderArtifactSource(
+        providerName: "Test Provider",
+        artifactURL: URL(string: "https://provider.example/qwen.gguf")!
+    )
+    let candidate = ModelCandidate(
+        id: "qwen3:8b",
+        displayName: "Qwen 3 8B",
+        approximateDownloadSizeGB: 5.2,
+        minimumMemoryGB: 16,
+        tier: .balanced,
+        installStrategy: .providerArtifact(providerSource)
+    )
+    let recommendation = InstallRecommendation(
+        status: .ready,
+        tier: candidate.tier.rawValue,
+        candidate: candidate,
+        rationale: "Best fit for detected hardware."
+    )
+    let service = StubInstallerService(
+        recommendation: recommendation,
+        candidates: [candidate]
+    )
+    let profile = CapabilityProfile(architecture: "arm64", memoryGB: 16, freeDiskGB: 80, performanceCores: 8)
+    let runtimeClient = StubInferenceClient()
+    let installedModelStore = InMemoryInstalledModelStore()
+    let actionLogStore = InMemoryInstallerActionLogStore()
+    let downloader = StubArtifactDownloader(
+        events: [
+            .started(resumedBytes: 0, totalBytes: 10),
+            .progress(bytesWritten: 10, totalBytes: 10),
+            .completed(destinationURL: URL(fileURLWithPath: "/tmp/provider.gguf"), totalBytes: 10)
+        ]
+    )
+    let importer = StubRuntimeModelImporter(
+        events: [
+            .started(modelID: candidate.id),
+            .status("importing"),
+            .completed
+        ]
+    )
+    let verifier = StubArtifactVerifier(checksumValue: "provider-sha256")
+    let providerDirectory = FileManager.default.temporaryDirectory
+        .appendingPathComponent("bzzbe-provider-tests", isDirectory: true)
+        .appendingPathComponent(UUID().uuidString, isDirectory: true)
+
+    let viewModel = InstallerOnboardingViewModel(
+        profile: profile,
+        installerService: service,
+        runtimeModelPuller: StubRuntimeModelPuller(events: []),
+        runtimeModelImporter: importer,
+        artifactDownloader: downloader,
+        artifactVerifier: verifier,
+        runtimeClient: runtimeClient,
+        installedModelStore: installedModelStore,
+        actionLogStore: actionLogStore,
+        providerArtifactsDirectoryURL: providerDirectory
+    )
+
+    viewModel.startInstall()
+    try await eventually {
+        if case .completed = viewModel.step {
+            return true
+        }
+        return false
+    }
+
+    #expect(installedModelStore.savedRecord?.modelID == candidate.id)
+    #expect(installedModelStore.savedRecord?.checksumSHA256 == "provider-sha256")
+    #expect(installedModelStore.savedRecord?.artifactPath.contains(providerDirectory.path) == true)
+}
+
 private struct StubInstallerService: Installing {
     let recommendation: InstallRecommendation
     let candidates: [ModelCandidate]
@@ -228,6 +302,60 @@ private actor StubRuntimeModelPuller: RuntimeModelPulling {
     }
 
     func cancelCurrentPull() async {}
+}
+
+private actor StubRuntimeModelImporter: RuntimeModelImporting {
+    private let events: [RuntimeModelImportEvent]
+    private let error: Error?
+
+    init(events: [RuntimeModelImportEvent], error: Error? = nil) {
+        self.events = events
+        self.error = error
+    }
+
+    func importModel(modelID: String, artifactFileURL: URL) async -> AsyncThrowingStream<RuntimeModelImportEvent, Error> {
+        AsyncThrowingStream { continuation in
+            for event in events {
+                continuation.yield(event)
+            }
+            if let error {
+                continuation.finish(throwing: error)
+            } else {
+                continuation.finish()
+            }
+        }
+    }
+
+    func cancelCurrentImport() async {}
+}
+
+private final class StubArtifactDownloader: ArtifactDownloading {
+    private let events: [ArtifactDownloadEvent]
+
+    init(events: [ArtifactDownloadEvent]) {
+        self.events = events
+    }
+
+    func startDownload(_ request: ArtifactDownloadRequest) -> AsyncThrowingStream<ArtifactDownloadEvent, Error> {
+        AsyncThrowingStream { continuation in
+            for event in events {
+                continuation.yield(event)
+            }
+            continuation.finish()
+        }
+    }
+
+    func cancelDownload(id: String) {}
+}
+
+private struct StubArtifactVerifier: ArtifactVerifying {
+    let checksumValue: String
+
+    func checksum(for fileURL: URL, algorithm: ArtifactHashAlgorithm) throws -> String {
+        checksumValue
+    }
+
+    func verify(fileURL: URL, against checksum: ArtifactChecksum) throws {}
 }
 
 private actor StubInferenceClient: InferenceClient {
