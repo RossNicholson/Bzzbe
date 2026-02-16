@@ -23,6 +23,7 @@ Based on `docs/JOB_LIST.md`, the following are complete:
 - ✅ **JOB-013** — Runtime integration (local streaming runtime client wired into chat with cancellation/error handling tests).
 - ✅ **JOB-014** — Privacy defaults and consent messaging (Settings now includes local-first disclosure plus telemetry/diagnostics opt-in controls defaulting to disabled).
 - ✅ **JOB-015** — Installer/model action log (installer flow now records action events; Settings displays and exports text logs).
+- ✅ **JOB-017** — Failure-recovery hardening (chat now maps runtime failures to recovery hints with one-click retry or setup rerun).
 
 ### What this means practically
 
@@ -43,14 +44,13 @@ Based on `docs/JOB_LIST.md`, the following are complete:
 
 ### P2 tasks still open
 
-- **JOB-017** — Failure-recovery hardening.
+- None currently open from the Phase 1 board.
 
 ## 3) Dependency-aware recommended order
 
 Recommended sequence from now:
 
 1. **JOB-016** (performance/reporting)
-2. **JOB-017** (failure-recovery hardening)
 
 ## 4) Short gap analysis
 
@@ -65,15 +65,12 @@ Recommended sequence from now:
 ## 5) Suggested immediate sprint (next 7-10 days)
 
 - **Primary track (P1):** JOB-016 performance harness/report setup.
-- **Parallel track (P2):** JOB-017 failure-recovery hardening.
 - **Exit criteria for sprint:**
   - Real runtime measurements are captured for two Apple Silicon tiers and merged into `docs/reports/alpha-01.md`.
-  - Failure-recovery scenarios are validated and documented.
 
 ## 6) Definition of “on-track” after next sprint
 
 You are on-track if the repository shows:
 
 - JOB-016 report updated with real runtime metrics for two Apple Silicon tiers.
-- JOB-017 landed with improved recovery behavior for cancellation/partial setup cases.
 - CI green on all existing + new tests.
