@@ -41,6 +41,14 @@ let package = Package(
         .testTarget(name: "CoreHardwareTests", dependencies: ["CoreHardware"]),
         .testTarget(name: "CoreInferenceTests", dependencies: ["CoreInference"]),
         .testTarget(name: "CoreInstallerTests", dependencies: ["CoreInstaller", "CoreHardware"]),
-        .testTarget(name: "CoreStorageTests", dependencies: ["CoreStorage"])
+        .testTarget(name: "CoreStorageTests", dependencies: ["CoreStorage"]),
+        .testTarget(
+            name: "BzzbeAppTests",
+            dependencies: [
+                "BzzbeApp",
+                "CoreInference",
+                "CoreStorage"
+            ]
+        )
     ]
 )

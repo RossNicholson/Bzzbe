@@ -24,10 +24,12 @@ final class ChatViewModel: ObservableObject {
     }
 
     @Published var draft: String = ""
+    @Published private(set) var conversations: [Conversation] = []
     @Published private(set) var messages: [Message] = []
     @Published private(set) var isStreaming: Bool = false
     @Published private(set) var errorMessage: String?
     @Published private(set) var lastPrompt: String?
+    @Published private(set) var activeConversationID: String?
 
     let model: InferenceModelDescriptor
 
@@ -36,7 +38,6 @@ final class ChatViewModel: ObservableObject {
     private var streamTask: Task<Void, Never>?
     private var assistantMessageID: UUID?
     private var activeRequestID: UUID?
-    private var activeConversationID: String?
     private var conversationIDByRequestID: [UUID: String] = [:]
 
     init(
@@ -63,6 +64,10 @@ final class ChatViewModel: ObservableObject {
 
     var canRetry: Bool {
         !isStreaming && lastPrompt != nil
+    }
+
+    var canDeleteActiveConversation: Bool {
+        !isStreaming && activeConversationID != nil
     }
 
     func sendDraft() {
@@ -97,6 +102,40 @@ final class ChatViewModel: ObservableObject {
 
         Task {
             await inferenceClient.cancelCurrentRequest()
+        }
+    }
+
+    func startNewConversation() {
+        guard !isStreaming else { return }
+        draft = ""
+        activeConversationID = nil
+        messages.removeAll()
+        assistantMessageID = nil
+        activeRequestID = nil
+        conversationIDByRequestID.removeAll()
+        lastPrompt = nil
+        errorMessage = nil
+    }
+
+    func selectConversation(id: String) {
+        guard !isStreaming else { return }
+        guard id != activeConversationID else { return }
+
+        Task {
+            await loadConversation(id: id)
+        }
+    }
+
+    func deleteActiveConversation() {
+        guard let activeConversationID else { return }
+        deleteConversation(id: activeConversationID)
+    }
+
+    func deleteConversation(id: String) {
+        guard !isStreaming else { return }
+
+        Task {
+            await performDeleteConversation(id: id)
         }
     }
 
@@ -200,6 +239,7 @@ final class ChatViewModel: ObservableObject {
                 role: .user,
                 content: prompt
             )
+            try? await refreshConversations()
         } catch {
             errorMessage = "Failed to save conversation. \(error.localizedDescription)"
         }
@@ -212,6 +252,7 @@ final class ChatViewModel: ObservableObject {
 
         let createdConversation = try await conversationStore.createConversation(title: conversationTitle(from: prompt))
         activeConversationID = createdConversation.id
+        try? await refreshConversations()
         return createdConversation.id
     }
 
@@ -225,27 +266,67 @@ final class ChatViewModel: ObservableObject {
         guard !trimmedContent.isEmpty else { return }
 
         Task {
-            _ = try? await conversationStore.addMessage(
-                conversationID: conversationID,
-                role: .assistant,
-                content: trimmedContent
-            )
+            do {
+                _ = try await conversationStore.addMessage(
+                    conversationID: conversationID,
+                    role: .assistant,
+                    content: trimmedContent
+                )
+                try? await refreshConversations()
+            } catch {
+                errorMessage = "Failed to save conversation. \(error.localizedDescription)"
+            }
         }
     }
 
     private func restoreLatestConversationIfAvailable() async {
-        guard messages.isEmpty else { return }
-
         do {
-            guard let latestConversation = try await conversationStore.listConversations().first else { return }
-            let storedMessages = try await conversationStore.listMessages(conversationID: latestConversation.id)
-
+            try await refreshConversations()
             guard messages.isEmpty else { return }
-            activeConversationID = latestConversation.id
-            messages = storedMessages.map(chatMessage(from:))
+            guard let latestConversation = conversations.first else { return }
+            await loadConversation(id: latestConversation.id)
         } catch {
             errorMessage = "Failed to restore previous conversation. \(error.localizedDescription)"
         }
+    }
+
+    private func performDeleteConversation(id: String) async {
+        do {
+            try await conversationStore.deleteConversation(id: id)
+
+            conversationIDByRequestID = conversationIDByRequestID.filter { $0.value != id }
+            let deletedActiveConversation = activeConversationID == id
+            if deletedActiveConversation {
+                activeConversationID = nil
+                messages.removeAll()
+                assistantMessageID = nil
+                lastPrompt = nil
+            }
+
+            try await refreshConversations()
+
+            if deletedActiveConversation, let nextConversationID = conversations.first?.id {
+                await loadConversation(id: nextConversationID)
+            }
+        } catch {
+            errorMessage = "Failed to delete conversation. \(error.localizedDescription)"
+        }
+    }
+
+    private func loadConversation(id: String) async {
+        do {
+            let storedMessages = try await conversationStore.listMessages(conversationID: id)
+            activeConversationID = id
+            messages = storedMessages.map(chatMessage(from:))
+            lastPrompt = latestUserPrompt(in: storedMessages)
+            errorMessage = nil
+        } catch {
+            errorMessage = "Failed to load conversation history. \(error.localizedDescription)"
+        }
+    }
+
+    private func refreshConversations() async throws {
+        conversations = try await conversationStore.listConversations()
     }
 
     private func chatMessage(from message: ConversationMessage) -> Message {
@@ -267,6 +348,10 @@ final class ChatViewModel: ObservableObject {
         return String(firstLine.prefix(60))
     }
 
+    private func latestUserPrompt(in messages: [ConversationMessage]) -> String? {
+        messages.reversed().first(where: { $0.role == .user })?.content
+    }
+
     private static func defaultConversationStore() -> any ConversationStoring {
         if let sqliteStore = try? SQLiteConversationStore.defaultStore() {
             return sqliteStore
@@ -279,6 +364,64 @@ struct ChatView: View {
     @StateObject private var viewModel = ChatViewModel()
 
     var body: some View {
+        HSplitView {
+            historyPanel
+                .frame(minWidth: 220, idealWidth: 260, maxWidth: 340)
+            chatPanel
+        }
+        .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
+    }
+
+    private var historyPanel: some View {
+        VStack(alignment: .leading, spacing: 12) {
+            HStack(spacing: 8) {
+                Text("History")
+                    .font(.headline)
+                Spacer()
+                Button {
+                    viewModel.startNewConversation()
+                } label: {
+                    Label("New Conversation", systemImage: "square.and.pencil")
+                        .labelStyle(.iconOnly)
+                }
+                .buttonStyle(.plain)
+                .help("Start a new conversation")
+                .disabled(viewModel.isStreaming)
+            }
+
+            List(selection: selectedConversationBinding) {
+                if viewModel.conversations.isEmpty {
+                    Text("No saved conversations yet")
+                        .font(.footnote)
+                        .foregroundStyle(.secondary)
+                        .padding(.vertical, 4)
+                } else {
+                    ForEach(viewModel.conversations, id: \.id) { conversation in
+                        ConversationRow(conversation: conversation)
+                            .tag(Optional(conversation.id))
+                            .contextMenu {
+                                Button("Delete Conversation", role: .destructive) {
+                                    viewModel.deleteConversation(id: conversation.id)
+                                }
+                                .disabled(viewModel.isStreaming)
+                            }
+                    }
+                }
+            }
+            .listStyle(.sidebar)
+
+            Button(role: .destructive) {
+                viewModel.deleteActiveConversation()
+            } label: {
+                Label("Delete Selected", systemImage: "trash")
+                    .frame(maxWidth: .infinity, alignment: .leading)
+            }
+            .disabled(!viewModel.canDeleteActiveConversation)
+        }
+        .padding(12)
+    }
+
+    private var chatPanel: some View {
         VStack(spacing: 12) {
             header
             Divider()
@@ -292,7 +435,16 @@ struct ChatView: View {
             composer
         }
         .padding(20)
-        .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
+    }
+
+    private var selectedConversationBinding: Binding<String?> {
+        Binding(
+            get: { viewModel.activeConversationID },
+            set: { newConversationID in
+                guard let newConversationID else { return }
+                viewModel.selectConversation(id: newConversationID)
+            }
+        )
     }
 
     private var header: some View {
@@ -372,6 +524,22 @@ struct ChatView: View {
             }
             .frame(maxWidth: .infinity, alignment: .trailing)
         }
+    }
+}
+
+private struct ConversationRow: View {
+    let conversation: Conversation
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 4) {
+            Text(conversation.title)
+                .lineLimit(2)
+                .font(.body.weight(.medium))
+            Text(conversation.updatedAt, format: .dateTime.day().month(.abbreviated).hour().minute())
+                .font(.caption)
+                .foregroundStyle(.secondary)
+        }
+        .padding(.vertical, 4)
     }
 }
 
