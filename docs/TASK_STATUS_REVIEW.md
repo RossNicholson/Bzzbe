@@ -19,6 +19,7 @@ Based on `docs/JOB_LIST.md`, the following are complete:
 - ✅ **JOB-009** — Checksum and artifact verification (SHA-256 enforcement before setup completion with explicit mismatch errors).
 - ✅ **JOB-010** — Persist installed model metadata (installed model records now save/load with JSON store and installer write-through).
 - ✅ **JOB-011** — Conversation storage schema + repository (SQLite CRUD + tested persistence).
+- ✅ **JOB-012** — Conversation list/history UX (history sidebar with conversation restore/select/delete behavior wired to storage).
 - ✅ **JOB-013** — Runtime integration (local streaming runtime client wired into chat with cancellation/error handling tests).
 
 ### What this means practically
@@ -36,7 +37,6 @@ Based on `docs/JOB_LIST.md`, the following are complete:
 
 ### P1 tasks still open (alpha quality and polish)
 
-- **JOB-012** — Conversation list/history UX.
 - **JOB-014** — Privacy defaults and consent messaging.
 - **JOB-015** — Installer/model action log.
 - **JOB-016** — Alpha performance harness + report.
@@ -49,16 +49,14 @@ Based on `docs/JOB_LIST.md`, the following are complete:
 
 Recommended sequence from now:
 
-1. **JOB-012** (history UI polish on top of persisted data)
-2. **JOB-014** + **JOB-015** (privacy + action log)
-3. **JOB-016** (performance/reporting)
-4. **JOB-017** (failure-recovery hardening)
+1. **JOB-014** + **JOB-015** (privacy + action log)
+2. **JOB-016** (performance/reporting)
+3. **JOB-017** (failure-recovery hardening)
 
 ## 4) Short gap analysis
 
 ### Biggest product gaps right now
 
-- Conversation persistence foundation exists, but conversation browsing/history UX still needs completion.
 - Privacy defaults/consent messaging and installer action logging are not yet surfaced in-product.
 
 ### Biggest risk gaps
@@ -68,16 +66,16 @@ Recommended sequence from now:
 
 ## 5) Suggested immediate sprint (next 7-10 days)
 
-- **Primary track (P1):** JOB-012.
-- **Parallel track (P1):** JOB-014 privacy defaults/consent.
+- **Primary track (P1):** JOB-014 privacy defaults/consent.
+- **Parallel track (P1):** JOB-015 installer/model action log.
 - **Exit criteria for sprint:**
-  - Conversation list/history UX is complete with restore and delete flow.
   - Privacy controls/defaults are visible in Settings and documented.
+  - Installer action log is visible and exportable.
 
 ## 6) Definition of “on-track” after next sprint
 
 You are on-track if the repository shows:
 
-- JOB-012 landed with conversation browsing/history UX and delete behavior.
 - JOB-014 landed with clear local-first defaults and consent messaging.
+- JOB-015 landed with installer/model action logging and export support.
 - CI green on all existing + new tests.
