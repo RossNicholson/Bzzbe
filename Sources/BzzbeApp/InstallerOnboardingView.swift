@@ -36,33 +36,26 @@ final class InstallerOnboardingViewModel: ObservableObject {
     }
 
     private let installerService: Installing
-    private let artifactDownloader: ArtifactDownloading
-    private let artifactVerifier: ArtifactVerifying
+    private let runtimeModelPuller: RuntimeModelPulling
     private let runtimeClient: any InferenceClient
     private let installedModelStore: InstalledModelStoring
     private let actionLogStore: InstallerActionLogging
-    private let fileManager: FileManager
     private var installTask: Task<Void, Never>?
-    private var activeDownloadID: String?
 
     init(
         profile: CapabilityProfile,
         installerService: Installing = InstallerService(),
-        artifactDownloader: ArtifactDownloading = ResumableArtifactDownloadManager(),
-        artifactVerifier: ArtifactVerifying = ArtifactVerifier(),
+        runtimeModelPuller: RuntimeModelPulling = OllamaModelPullClient(),
         runtimeClient: any InferenceClient = LocalRuntimeInferenceClient(),
         installedModelStore: InstalledModelStoring = JSONInstalledModelStore.defaultStore(),
-        actionLogStore: InstallerActionLogging = JSONInstallerActionLogStore.defaultStore(),
-        fileManager: FileManager = .default
+        actionLogStore: InstallerActionLogging = JSONInstallerActionLogStore.defaultStore()
     ) {
         self.profile = profile
         self.installerService = installerService
-        self.artifactDownloader = artifactDownloader
-        self.artifactVerifier = artifactVerifier
+        self.runtimeModelPuller = runtimeModelPuller
         self.runtimeClient = runtimeClient
         self.installedModelStore = installedModelStore
         self.actionLogStore = actionLogStore
-        self.fileManager = fileManager
         let recommendation = installerService.recommendedInstall(for: profile)
         self.recommendation = recommendation
         let availableCandidates = installerService.compatibleCandidates(for: profile)
@@ -118,11 +111,11 @@ final class InstallerOnboardingViewModel: ObservableObject {
     func cancelInstall() {
         guard isInstalling else { return }
         statusText = "Cancelling setup..."
-        if let activeDownloadID {
-            artifactDownloader.cancelDownload(id: activeDownloadID)
-        }
         installTask?.cancel()
         installTask = nil
+        Task {
+            await runtimeModelPuller.cancelCurrentPull()
+        }
     }
 
     func retryInstall() {
@@ -136,94 +129,71 @@ final class InstallerOnboardingViewModel: ObservableObject {
         statusText = "Preparing setup..."
 
         do {
-            let plan = try makeDownloadPlan(for: candidate)
             logAction(
                 category: "install.started",
-                message: "Starting install for \(plan.candidate.id) (\(plan.tier))."
+                message: "Starting install for \(candidate.id) (\(candidate.tier.rawValue))."
             )
-            activeDownloadID = plan.request.id
             var completed = false
-            var didLogDownloadStart = false
+            var didLogPullStart = false
 
-            let stream = artifactDownloader.startDownload(plan.request)
+            let stream = await runtimeModelPuller.pullModel(candidate.id)
             for try await event in stream {
                 try Task.checkCancellation()
                 switch event {
-                case let .started(resumedBytes, totalBytes):
-                    progress = fraction(numerator: resumedBytes, denominator: totalBytes)
-                    if !didLogDownloadStart {
-                        didLogDownloadStart = true
-                        if resumedBytes > 0 {
-                            logAction(
-                                category: "download.resumed",
-                                message: "Resumed \(plan.request.id) at \(resumedBytes) of \(totalBytes) bytes."
-                            )
-                        } else {
-                            logAction(
-                                category: "download.started",
-                                message: "Started \(plan.request.id) with expected size \(totalBytes) bytes."
-                            )
-                        }
+                case .started:
+                    progress = 0
+                    statusText = "Starting model download..."
+                    if !didLogPullStart {
+                        didLogPullStart = true
+                        logAction(
+                            category: "runtime.pull.started",
+                            message: "Started runtime model pull for \(candidate.id)."
+                        )
                     }
-                    if resumedBytes > 0 {
-                        statusText = "Resuming download (\(resumedBytes / 1024)KB already downloaded)"
+                case let .status(message):
+                    statusText = message
+                case let .progress(completedBytes, totalBytes, status):
+                    progress = fraction(numerator: completedBytes, denominator: totalBytes)
+                    if let status, !status.isEmpty {
+                        statusText = status
                     } else {
-                        statusText = "Starting download..."
+                        statusText = "Downloading model package..."
                     }
-                case let .progress(bytesWritten, totalBytes):
-                    progress = fraction(numerator: bytesWritten, denominator: totalBytes)
-                    statusText = "Downloading model package..."
                 case .completed:
                     progress = 1
-                    statusText = "Download complete. Verifying artifact..."
+                    statusText = "Model download complete. Verifying runtime..."
                     logAction(
-                        category: "download.completed",
-                        message: "Completed \(plan.request.id). Starting verification."
+                        category: "runtime.pull.completed",
+                        message: "Runtime reported model pull complete for \(candidate.id)."
                     )
                     completed = true
                 }
             }
 
             if completed {
-                do {
-                    try artifactVerifier.verify(fileURL: plan.request.destinationURL, against: plan.expectedChecksum)
-                    logAction(
-                        category: "verification.passed",
-                        message: "Checksum passed for \(plan.request.destinationURL.lastPathComponent)."
-                    )
-                } catch {
-                    logAction(
-                        category: "verification.failed",
-                        message: error.localizedDescription
-                    )
-                    try? fileManager.removeItem(at: plan.request.destinationURL)
-                    throw error
-                }
-
                 statusText = "Verifying local runtime and model availability..."
                 logAction(
                     category: "runtime.validation.started",
-                    message: "Checking runtime/model availability for \(plan.candidate.id)."
+                    message: "Checking runtime/model availability for \(candidate.id)."
                 )
-                try await ensureRuntimeModelAvailable(for: plan.candidate)
+                try await ensureRuntimeModelAvailable(for: candidate)
                 logAction(
                     category: "runtime.validation.passed",
-                    message: "Runtime confirmed model availability for \(plan.candidate.id)."
+                    message: "Runtime confirmed model availability for \(candidate.id)."
                 )
 
-                try persistInstalledModelMetadata(plan)
+                try persistInstalledModelMetadata(for: candidate)
                 logAction(
                     category: "model.persisted",
-                    message: "Persisted installed model metadata for \(plan.candidate.id)."
+                    message: "Persisted installed model metadata for \(candidate.id)."
                 )
-                statusText = "Verification passed. Setup complete."
+                statusText = "Setup complete."
                 isInstalling = false
                 step = .completed
                 installTask = nil
-                activeDownloadID = nil
                 logAction(
                     category: "install.completed",
-                    message: "Install completed for \(plan.candidate.id)."
+                    message: "Install completed for \(candidate.id)."
                 )
             } else if Task.isCancelled {
                 throw CancellationError()
@@ -235,50 +205,14 @@ final class InstallerOnboardingViewModel: ObservableObject {
             step = .failed(message: "Setup was cancelled. You can retry safely.")
             statusText = "Setup cancelled."
             installTask = nil
-            activeDownloadID = nil
             logAction(category: "install.cancelled", message: "Install was cancelled by the user.")
         } catch {
             isInstalling = false
             step = .failed(message: "Setup failed: \(error.localizedDescription)")
             statusText = "Setup failed."
             installTask = nil
-            activeDownloadID = nil
             logAction(category: "install.failed", message: error.localizedDescription)
         }
-    }
-
-    private struct DownloadPlan {
-        let candidate: ModelCandidate
-        let tier: String
-        let request: ArtifactDownloadRequest
-        let expectedChecksum: ArtifactChecksum
-    }
-
-    private func makeDownloadPlan(for candidate: ModelCandidate) throws -> DownloadPlan {
-        let root = try installerWorkspaceRoot()
-        let sourceDirectory = root.appendingPathComponent("seed-artifacts", isDirectory: true)
-        let destinationDirectory = root.appendingPathComponent("downloads", isDirectory: true)
-        try fileManager.createDirectory(at: sourceDirectory, withIntermediateDirectories: true)
-        try fileManager.createDirectory(at: destinationDirectory, withIntermediateDirectories: true)
-
-        let safeIdentifier = sanitizedIdentifier(candidate.id)
-        let seedURL = sourceDirectory.appendingPathComponent("\(safeIdentifier).seed", isDirectory: false)
-        let destinationURL = destinationDirectory.appendingPathComponent("\(safeIdentifier).artifact", isDirectory: false)
-
-        try ensureSeedArtifactExists(at: seedURL, approximateSizeGB: candidate.approximateDownloadSizeGB)
-        let expectedSHA256 = try artifactVerifier.checksum(for: seedURL, algorithm: .sha256)
-        let expectedChecksum = try ArtifactChecksum(value: expectedSHA256)
-
-        return DownloadPlan(
-            candidate: candidate,
-            tier: candidate.tier.rawValue,
-            request: ArtifactDownloadRequest(
-                id: "installer.\(safeIdentifier)",
-                sourceURL: seedURL,
-                destinationURL: destinationURL
-            ),
-            expectedChecksum: expectedChecksum
-        )
     }
 
     private func ensureRuntimeModelAvailable(for candidate: ModelCandidate) async throws {
@@ -299,7 +233,7 @@ final class InstallerOnboardingViewModel: ObservableObject {
             case let .runtime(details):
                 if isMissingModelError(details) {
                     throw InstallationFlowError.modelMissing(
-                        "Local runtime is running, but model '\(candidate.id)' is not installed. Run `ollama pull \(candidate.id)` in Terminal, then retry setup."
+                        "Local runtime did not report model '\(candidate.id)' as installed after pull. Retry setup."
                     )
                 }
                 throw InstallationFlowError.runtimeUnavailable(error.localizedDescription)
@@ -318,69 +252,15 @@ final class InstallerOnboardingViewModel: ObservableObject {
             || normalized.contains("unknown model")
     }
 
-    private func persistInstalledModelMetadata(_ plan: DownloadPlan) throws {
+    private func persistInstalledModelMetadata(for candidate: ModelCandidate) throws {
         let record = InstalledModelRecord(
-            modelID: plan.candidate.id,
-            tier: plan.tier,
-            artifactPath: plan.request.destinationURL.path,
-            checksumSHA256: plan.expectedChecksum.value,
+            modelID: candidate.id,
+            tier: candidate.tier.rawValue,
+            artifactPath: "ollama://\(candidate.id)",
+            checksumSHA256: "runtime-managed",
             version: "1"
         )
         try installedModelStore.save(record: record)
-    }
-
-    private func installerWorkspaceRoot() throws -> URL {
-        let base = fileManager.urls(for: .applicationSupportDirectory, in: .userDomainMask).first
-            ?? fileManager.temporaryDirectory
-        let root = base.appendingPathComponent("Bzzbe", isDirectory: true)
-            .appendingPathComponent("installer", isDirectory: true)
-        try fileManager.createDirectory(at: root, withIntermediateDirectories: true)
-        return root
-    }
-
-    private func ensureSeedArtifactExists(at url: URL, approximateSizeGB: Double) throws {
-        let byteCount = targetSeedArtifactBytes(approximateSizeGB: approximateSizeGB)
-
-        if fileManager.fileExists(atPath: url.path),
-           let existingSize = try? fileSize(at: url),
-           existingSize == byteCount {
-            return
-        }
-
-        if fileManager.fileExists(atPath: url.path) {
-            try fileManager.removeItem(at: url)
-        }
-
-        fileManager.createFile(atPath: url.path, contents: nil)
-        let handle = try FileHandle(forWritingTo: url)
-        defer { try? handle.close() }
-
-        var remaining = byteCount
-        let chunk = Data(repeating: 0x42, count: 64 * 1024)
-        while remaining > 0 {
-            let sliceCount = min(chunk.count, remaining)
-            try handle.write(contentsOf: chunk.prefix(sliceCount))
-            remaining -= sliceCount
-        }
-    }
-
-    private func targetSeedArtifactBytes(approximateSizeGB: Double) -> Int {
-        let baseline = Int(max(1.0, approximateSizeGB) * 350_000)
-        return max(512 * 1024, min(4 * 1024 * 1024, baseline))
-    }
-
-    private func fileSize(at url: URL) throws -> Int {
-        let values = try url.resourceValues(forKeys: [.fileSizeKey])
-        return values.fileSize ?? 0
-    }
-
-    private func sanitizedIdentifier(_ value: String) -> String {
-        let sanitized = value.replacingOccurrences(
-            of: #"[^A-Za-z0-9._-]"#,
-            with: "_",
-            options: .regularExpression
-        )
-        return sanitized.isEmpty ? "artifact" : sanitized
     }
 
     private func fraction(numerator: Int64, denominator: Int64) -> Double {
@@ -414,7 +294,7 @@ extension InstallationFlowError: LocalizedError {
         case let .modelMissing(message):
             return message
         case .downloadEndedUnexpectedly:
-            return "Download ended unexpectedly before completion."
+            return "Model pull ended unexpectedly before completion."
         }
     }
 }
@@ -480,7 +360,7 @@ struct InstallerOnboardingView: View {
                 .font(.headline)
             Text("Bzzbe runs models on-device by default. Setup will configure a local runtime and install a recommended model profile for this Mac.")
                 .foregroundStyle(.secondary)
-            Text("If the local runtime is unavailable, setup will show how to fix it and retry.")
+            Text("Model download is handled in-app. If the local runtime is unavailable, setup will show how to fix it and retry.")
                 .font(.subheadline.weight(.semibold))
             Button("Continue") {
                 viewModel.continueFromIntro()
