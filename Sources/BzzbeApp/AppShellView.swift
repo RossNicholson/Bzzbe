@@ -7,6 +7,7 @@ import SwiftUI
 struct AppShellView: View {
     @State private var appState = AppState()
     @AppStorage("hasCompletedInitialSetup") private var hasCompletedInitialSetup = false
+    @AppStorage("preferredModelID") private var preferredModelID = ""
 
     var body: some View {
         NavigationSplitView {
@@ -20,6 +21,7 @@ struct AppShellView: View {
             RouteDetailView(
                 route: appState.selectedRoute,
                 capabilityProfile: appState.capabilityProfile,
+                preferredModelID: $preferredModelID,
                 onRequestSetupRerun: { hasCompletedInitialSetup = false }
             )
         }
@@ -45,76 +47,81 @@ struct AppShellView: View {
 private struct RouteDetailView: View {
     let route: AppState.Route
     let capabilityProfile: CapabilityProfile
+    @Binding var preferredModelID: String
     let onRequestSetupRerun: () -> Void
 
     var body: some View {
-        switch route {
-        case .chat:
-            ChatView(onRequestSetupRerun: onRequestSetupRerun)
-        case .tasks:
-            TaskWorkspaceView(model: defaultModel)
-        case .models:
-            RoutePlaceholderView(
-                title: route.title,
-                subtitle: route.subtitle,
-                content: content,
-                capabilityProfile: nil
+        Group {
+            switch route {
+            case .chat:
+                ChatView(model: selectedModel, onRequestSetupRerun: onRequestSetupRerun)
+                    .id("chat-\(selectedModel.identifier)")
+            case .tasks:
+                TaskWorkspaceView(model: selectedModel)
+                    .id("tasks-\(selectedModel.identifier)")
+            case .models:
+                ModelsView(
+                    profile: capabilityProfile,
+                    preferredModelID: $preferredModelID,
+                    onRequestSetupRerun: onRequestSetupRerun
+                )
+            case .settings:
+                SettingsView(capabilityProfile: capabilityProfile)
+            }
+        }
+        .onAppear {
+            syncPreferredModelIfNeeded()
+        }
+    }
+
+    private var selectedModel: InferenceModelDescriptor {
+        if let selectedCandidate = selectedCandidate {
+            return modelDescriptor(from: selectedCandidate)
+        }
+        if !preferredModelID.isEmpty {
+            return InferenceModelDescriptor(
+                identifier: preferredModelID,
+                displayName: preferredModelID,
+                contextWindow: 32_768
             )
-        case .settings:
-            SettingsView(capabilityProfile: capabilityProfile)
         }
-    }
-
-    private var content: String {
-        switch route {
-        case .chat:
-            return "Chat shell ready. Streaming UI will be implemented in JOB-006."
-        case .tasks:
-            return ""
-        case .models:
-            return "Initial model setup is available at first launch. Ongoing model management UI is next phase work."
-        case .settings:
-            return ""
-        }
-    }
-
-    private var defaultModel: InferenceModelDescriptor {
-        InferenceModelDescriptor(
+        return InferenceModelDescriptor(
             identifier: "qwen3:8b",
             displayName: "Qwen 3 8B",
             contextWindow: 32_768
         )
     }
-}
 
-private struct RoutePlaceholderView: View {
-    let title: String
-    let subtitle: String
-    let content: String
-    let capabilityProfile: CapabilityProfile?
-
-    var body: some View {
-        VStack(alignment: .leading, spacing: 12) {
-            Text(title)
-                .font(.largeTitle.bold())
-            Text(subtitle)
-                .font(.title3)
-                .foregroundStyle(.secondary)
-
-            Divider()
-
-            Text(content)
-                .font(.body)
-                .foregroundStyle(.secondary)
-
-            if let capabilityProfile {
-                CapabilityDebugView(profile: capabilityProfile)
-            }
-
-            Spacer()
+    private var selectedCandidate: ModelCandidate? {
+        if let preferredCandidate = InstallerService.defaultCatalog.first(where: { $0.id == preferredModelID }) {
+            return preferredCandidate
         }
-        .padding(24)
-        .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
+
+        return InstallerService()
+            .recommendedInstall(for: capabilityProfile)
+            .candidate
+            ?? InstallerService.defaultCatalog.first
+    }
+
+    private func modelDescriptor(from candidate: ModelCandidate) -> InferenceModelDescriptor {
+        InferenceModelDescriptor(
+            identifier: candidate.id,
+            displayName: candidate.displayName,
+            contextWindow: 32_768
+        )
+    }
+
+    private func syncPreferredModelIfNeeded() {
+        if !preferredModelID.isEmpty {
+            return
+        }
+        if let recommendedID = InstallerService().recommendedInstall(for: capabilityProfile).candidate?.id {
+            preferredModelID = recommendedID
+            return
+        }
+        if let firstCandidateID = InstallerService.defaultCatalog.first?.id {
+            preferredModelID = firstCandidateID
+        }
     }
 }
 

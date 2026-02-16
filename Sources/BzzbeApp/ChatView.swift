@@ -444,9 +444,19 @@ final class ChatViewModel: ObservableObject {
 struct ChatView: View {
     @StateObject private var viewModel: ChatViewModel
 
-    init(onRequestSetupRerun: @escaping () -> Void = {}) {
+    init(
+        model: InferenceModelDescriptor = InferenceModelDescriptor(
+            identifier: "qwen3:8b",
+            displayName: "Qwen 3 8B",
+            contextWindow: 32_768
+        ),
+        onRequestSetupRerun: @escaping () -> Void = {}
+    ) {
         _viewModel = StateObject(
-            wrappedValue: ChatViewModel(onRequestSetupRerun: onRequestSetupRerun)
+            wrappedValue: ChatViewModel(
+                onRequestSetupRerun: onRequestSetupRerun,
+                model: model
+            )
         )
     }
 

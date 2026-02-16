@@ -24,9 +24,9 @@ struct AppState {
             case .chat:
                 return "Local chat interactions"
             case .tasks:
-                return "Agent workflows (coming next phase)"
+                return "Template-based local workflows"
             case .models:
-                return "Model management (coming next phase)"
+                return "Preferred model and installed metadata"
             case .settings:
                 return "App preferences and diagnostics"
             }
