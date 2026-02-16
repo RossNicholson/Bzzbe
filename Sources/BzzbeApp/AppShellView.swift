@@ -43,13 +43,15 @@ private struct RouteDetailView: View {
         switch route {
         case .chat:
             ChatView()
-        case .tasks, .models, .settings:
+        case .tasks, .models:
             RoutePlaceholderView(
                 title: route.title,
                 subtitle: route.subtitle,
                 content: content,
-                capabilityProfile: route == .settings ? capabilityProfile : nil
+                capabilityProfile: nil
             )
+        case .settings:
+            SettingsView(capabilityProfile: capabilityProfile)
         }
     }
 
@@ -62,7 +64,7 @@ private struct RouteDetailView: View {
         case .models:
             return "Initial model setup is available at first launch. Ongoing model management UI is next phase work."
         case .settings:
-            return "Settings placeholder for privacy controls and diagnostics."
+            return ""
         }
     }
 }
@@ -95,6 +97,54 @@ private struct RoutePlaceholderView: View {
         }
         .padding(24)
         .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
+    }
+}
+
+private struct SettingsView: View {
+    let capabilityProfile: CapabilityProfile
+    @StateObject private var privacySettings = PrivacySettingsModel()
+
+    var body: some View {
+        ScrollView {
+            VStack(alignment: .leading, spacing: 16) {
+                Text("Settings")
+                    .font(.largeTitle.bold())
+                Text("Privacy, consent, and diagnostics")
+                    .font(.title3)
+                    .foregroundStyle(.secondary)
+
+                GroupBox("Local-first data policy") {
+                    Text(
+                        "Bzzbe keeps prompts, conversation history, and model execution local to this Mac by default. "
+                            + "Optional telemetry and diagnostics are disabled unless you explicitly enable them."
+                    )
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                }
+
+                GroupBox("Consent controls") {
+                    VStack(alignment: .leading, spacing: 12) {
+                        Toggle("Share anonymous usage telemetry (optional)", isOn: $privacySettings.telemetryEnabled)
+                        Toggle("Share crash diagnostics (optional)", isOn: $privacySettings.diagnosticsEnabled)
+                        Text("Default for both controls: Off")
+                            .font(.footnote)
+                            .foregroundStyle(.secondary)
+                    }
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                }
+
+                GroupBox("Current privacy status") {
+                    VStack(alignment: .leading, spacing: 6) {
+                        Text("Usage telemetry: \(privacySettings.telemetryEnabled ? "Enabled" : "Disabled")")
+                        Text("Crash diagnostics: \(privacySettings.diagnosticsEnabled ? "Enabled" : "Disabled")")
+                    }
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                }
+
+                CapabilityDebugView(profile: capabilityProfile)
+            }
+            .padding(24)
+            .frame(maxWidth: .infinity, alignment: .topLeading)
+        }
     }
 }
 
