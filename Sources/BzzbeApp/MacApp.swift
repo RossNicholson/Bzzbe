@@ -1,6 +1,9 @@
 #if canImport(SwiftUI)
 import CoreHardware
 import SwiftUI
+#if canImport(AppKit)
+import AppKit
+#endif
 
 @main
 struct BzzbeMacApp: App {
@@ -8,6 +11,13 @@ struct BzzbeMacApp: App {
 
     private let gate = PlatformGate()
     private let capabilityProfile = DefaultHardwareProfiler().currentProfile()
+
+    init() {
+#if canImport(AppKit)
+        NSApplication.shared.setActivationPolicy(.regular)
+        NSApplication.shared.activate(ignoringOtherApps: true)
+#endif
+    }
 
     var body: some Scene {
         WindowGroup {
