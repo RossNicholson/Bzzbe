@@ -1,5 +1,6 @@
 #if canImport(SwiftUI)
 import CoreHardware
+import CoreInference
 import CoreInstaller
 import Foundation
 import SwiftUI
@@ -37,6 +38,7 @@ final class InstallerOnboardingViewModel: ObservableObject {
     private let installerService: Installing
     private let artifactDownloader: ArtifactDownloading
     private let artifactVerifier: ArtifactVerifying
+    private let runtimeClient: any InferenceClient
     private let installedModelStore: InstalledModelStoring
     private let actionLogStore: InstallerActionLogging
     private let fileManager: FileManager
@@ -48,6 +50,7 @@ final class InstallerOnboardingViewModel: ObservableObject {
         installerService: Installing = InstallerService(),
         artifactDownloader: ArtifactDownloading = ResumableArtifactDownloadManager(),
         artifactVerifier: ArtifactVerifying = ArtifactVerifier(),
+        runtimeClient: any InferenceClient = LocalRuntimeInferenceClient(),
         installedModelStore: InstalledModelStoring = JSONInstalledModelStore.defaultStore(),
         actionLogStore: InstallerActionLogging = JSONInstallerActionLogStore.defaultStore(),
         fileManager: FileManager = .default
@@ -56,6 +59,7 @@ final class InstallerOnboardingViewModel: ObservableObject {
         self.installerService = installerService
         self.artifactDownloader = artifactDownloader
         self.artifactVerifier = artifactVerifier
+        self.runtimeClient = runtimeClient
         self.installedModelStore = installedModelStore
         self.actionLogStore = actionLogStore
         self.fileManager = fileManager
@@ -196,6 +200,17 @@ final class InstallerOnboardingViewModel: ObservableObject {
                     throw error
                 }
 
+                statusText = "Verifying local runtime and model availability..."
+                logAction(
+                    category: "runtime.validation.started",
+                    message: "Checking runtime/model availability for \(plan.candidate.id)."
+                )
+                try await ensureRuntimeModelAvailable(for: plan.candidate)
+                logAction(
+                    category: "runtime.validation.passed",
+                    message: "Runtime confirmed model availability for \(plan.candidate.id)."
+                )
+
                 try persistInstalledModelMetadata(plan)
                 logAction(
                     category: "model.persisted",
@@ -264,6 +279,43 @@ final class InstallerOnboardingViewModel: ObservableObject {
             ),
             expectedChecksum: expectedChecksum
         )
+    }
+
+    private func ensureRuntimeModelAvailable(for candidate: ModelCandidate) async throws {
+        let model = InferenceModelDescriptor(
+            identifier: candidate.id,
+            displayName: candidate.displayName,
+            contextWindow: 32_768
+        )
+
+        do {
+            try await runtimeClient.loadModel(model)
+        } catch let error as LocalRuntimeInferenceError {
+            switch error {
+            case .unavailable:
+                throw InstallationFlowError.runtimeUnavailable(
+                    "Local runtime is not reachable at http://127.0.0.1:11434. Install and start Ollama, then retry setup."
+                )
+            case let .runtime(details):
+                if isMissingModelError(details) {
+                    throw InstallationFlowError.modelMissing(
+                        "Local runtime is running, but model '\(candidate.id)' is not installed. Run `ollama pull \(candidate.id)` in Terminal, then retry setup."
+                    )
+                }
+                throw InstallationFlowError.runtimeUnavailable(error.localizedDescription)
+            case .invalidResponseStatus, .invalidResponse:
+                throw InstallationFlowError.runtimeUnavailable(error.localizedDescription)
+            }
+        } catch {
+            throw InstallationFlowError.runtimeUnavailable(error.localizedDescription)
+        }
+    }
+
+    private func isMissingModelError(_ details: String) -> Bool {
+        let normalized = details.lowercased()
+        return normalized.contains("not found")
+            || normalized.contains("no such model")
+            || normalized.contains("unknown model")
     }
 
     private func persistInstalledModelMetadata(_ plan: DownloadPlan) throws {
@@ -349,7 +401,22 @@ final class InstallerOnboardingViewModel: ObservableObject {
 }
 
 private enum InstallationFlowError: Error {
+    case runtimeUnavailable(String)
+    case modelMissing(String)
     case downloadEndedUnexpectedly
+}
+
+extension InstallationFlowError: LocalizedError {
+    var errorDescription: String? {
+        switch self {
+        case let .runtimeUnavailable(message):
+            return message
+        case let .modelMissing(message):
+            return message
+        case .downloadEndedUnexpectedly:
+            return "Download ended unexpectedly before completion."
+        }
+    }
 }
 
 struct InstallerOnboardingView: View {
@@ -413,7 +480,7 @@ struct InstallerOnboardingView: View {
                 .font(.headline)
             Text("Bzzbe runs models on-device by default. Setup will configure a local runtime and install a recommended model profile for this Mac.")
                 .foregroundStyle(.secondary)
-            Text("No Terminal commands are required.")
+            Text("If the local runtime is unavailable, setup will show how to fix it and retry.")
                 .font(.subheadline.weight(.semibold))
             Button("Continue") {
                 viewModel.continueFromIntro()
