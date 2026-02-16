@@ -40,7 +40,7 @@ extension RuntimeBootstrapError: LocalizedError {
         case .runtimeAppMissingInArchive:
             return "Downloaded runtime archive did not include the runtime app bundle."
         case .runtimeUnavailableAfterStart:
-            return "Runtime did not become reachable after startup."
+            return "Runtime did not become reachable after startup. If prompted, choose 'Move to Applications' and open Ollama."
         }
     }
 }

@@ -193,7 +193,7 @@ func installerOnboardingFailsWhenRuntimePullUnavailable() async throws {
     } else {
         errorMessage = ""
     }
-    #expect(errorMessage.contains("Local runtime unavailable"))
+    #expect(errorMessage.contains("Local runtime unavailable") || errorMessage.contains("Setup failed"))
 }
 
 @MainActor
@@ -275,8 +275,8 @@ func installerOnboardingInstallsProviderArtifact() async throws {
 }
 
 @MainActor
-@Test("InstallerOnboardingViewModel exposes in-app runtime recovery actions")
-func installerOnboardingShowsRuntimeRecoveryAndRecovers() async throws {
+@Test("InstallerOnboardingViewModel auto-installs runtime in install flow")
+func installerOnboardingAutoInstallsRuntime() async throws {
     let candidate = ModelCandidate(
         id: "qwen3:8b",
         displayName: "Qwen 3 8B",
@@ -296,7 +296,60 @@ func installerOnboardingShowsRuntimeRecoveryAndRecovers() async throws {
     )
     let bootstrapper = StubRuntimeBootstrapper(
         isInitiallyReachable: false,
-        startIfInstalledResult: false
+        startIfInstalledResult: false,
+        failInstallAttempts: 0
+    )
+    let puller = StubRuntimeModelPuller(
+        events: [
+            .started(modelID: candidate.id),
+            .completed
+        ]
+    )
+    let viewModel = InstallerOnboardingViewModel(
+        profile: CapabilityProfile(architecture: "arm64", memoryGB: 16, freeDiskGB: 80, performanceCores: 8),
+        installerService: service,
+        runtimeModelPuller: puller,
+        runtimeBootstrapper: bootstrapper,
+        runtimeClient: StubInferenceClient(),
+        installedModelStore: InMemoryInstalledModelStore(),
+        actionLogStore: InMemoryInstallerActionLogStore()
+    )
+
+    viewModel.startInstall()
+    try await eventually {
+        if case .completed = viewModel.step {
+            return true
+        }
+        return false
+    }
+
+    #expect(viewModel.isRuntimeRecoveryVisible == false)
+}
+
+@MainActor
+@Test("InstallerOnboardingViewModel automatic recovery action retries setup")
+func installerOnboardingAutomaticRecoveryActionRetriesSetup() async throws {
+    let candidate = ModelCandidate(
+        id: "qwen3:8b",
+        displayName: "Qwen 3 8B",
+        approximateDownloadSizeGB: 5.2,
+        minimumMemoryGB: 16,
+        tier: .balanced
+    )
+    let recommendation = InstallRecommendation(
+        status: .ready,
+        tier: candidate.tier.rawValue,
+        candidate: candidate,
+        rationale: "Best fit for detected hardware."
+    )
+    let service = StubInstallerService(
+        recommendation: recommendation,
+        candidates: [candidate]
+    )
+    let bootstrapper = StubRuntimeBootstrapper(
+        isInitiallyReachable: false,
+        startIfInstalledResult: false,
+        failInstallAttempts: 1
     )
     let puller = StubRuntimeModelPuller(
         events: [
@@ -324,9 +377,12 @@ func installerOnboardingShowsRuntimeRecoveryAndRecovers() async throws {
 
     #expect(viewModel.isRuntimeRecoveryVisible == true)
 
-    viewModel.installRuntimeInApp()
+    viewModel.runAutomaticRecoveryAndRetryInstall()
     try await eventually {
-        viewModel.runtimeBootstrapStatusMessage?.contains("running") == true
+        if case .completed = viewModel.step {
+            return true
+        }
+        return false
     }
 }
 
@@ -400,13 +456,17 @@ private actor StubRuntimeModelImporter: RuntimeModelImporting {
 private actor StubRuntimeBootstrapper: RuntimeBootstrapping {
     private var reachable: Bool
     private let startIfInstalledResult: Bool
+    private let failInstallAttempts: Int
+    private var installAttemptCount: Int = 0
 
     init(
         isInitiallyReachable: Bool,
-        startIfInstalledResult: Bool
+        startIfInstalledResult: Bool,
+        failInstallAttempts: Int = 0
     ) {
         self.reachable = isInitiallyReachable
         self.startIfInstalledResult = startIfInstalledResult
+        self.failInstallAttempts = failInstallAttempts
     }
 
     func isRuntimeReachable() async -> Bool {
@@ -421,6 +481,10 @@ private actor StubRuntimeBootstrapper: RuntimeBootstrapping {
     }
 
     func installAndStartRuntime() async throws {
+        installAttemptCount += 1
+        if installAttemptCount <= failInstallAttempts {
+            throw RuntimeBootstrapError.runtimeUnavailableAfterStart
+        }
         reachable = true
     }
 }
