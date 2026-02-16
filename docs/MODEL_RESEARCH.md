@@ -16,59 +16,64 @@ We prioritized models that:
 Primary source pages reviewed:
 
 - `https://ollama.com/library`
-- `https://ollama.com/library/llama3.2`
-- `https://ollama.com/library/qwen2.5`
+- `https://ollama.com/library/qwen3`
 - `https://ollama.com/library/gemma3`
-- `https://ollama.com/library/mistral`
-- `https://ollama.com/library/phi4`
-- `https://ollama.com/library/deepseek-r1`
+- `https://ollama.com/library/gpt-oss`
+- `https://ollama.com/library/mistral-small3.1`
+- `https://ollama.com/library/phi4-mini`
+- `https://ollama.com/library/qwen2.5`
 
 ## Candidate model families
 
-### 1) Llama 3.2 (1B/3B)
+### 1) Qwen 3 (0.6B to 235B)
 
-- Strengths: small footprint, good baseline chat quality, practical for 8GB Macs.
-- Observed Ollama package sizes: ~1.3GB to ~2.0GB for common tags.
-- Best use in Bzzbe: default "small" tier and safe first-run install.
+- Strengths: strongest current open-family quality/size ladder for local chat + coding.
+- Observed Ollama package sizes (selected): ~2.6GB (4B), ~5.2GB (8B), ~9.3GB (14B).
+- Best use in Bzzbe: primary model family across all default RAM tiers.
 
-### 2) Qwen 2.5 (0.5B to 72B variants)
+### 2) Phi-4 Mini (3.8B)
 
-- Strengths: broad size ladder, generally strong instruction + coding behavior.
-- Observed Ollama package sizes (selected): ~398MB, ~986MB, ~1.9GB, ~4.7GB, ~9.0GB, ~20GB, ~47GB.
-- License note on model page: most variants Apache 2.0; exceptions called out for some sizes.
-- Best use in Bzzbe: default "balanced" tier around 7B.
+- Strengths: compact, recent, and practical for 8GB Macs.
+- Observed Ollama package size: ~2.5GB.
+- Best use in Bzzbe: small-tier fallback when Qwen 3 tags are unavailable.
 
 ### 3) Gemma 3 (multimodal family)
 
-- Strengths: multimodal-capable family with strong quality/size tradeoff.
+- Strengths: multimodal-capable family with strong quality/size tradeoff and broad adoption.
 - Observed Ollama package sizes (selected): ~815MB, ~3.3GB, ~8.1GB, ~17GB.
-- Best use in Bzzbe: "high quality" tier for 24GB+ Macs.
+- Best use in Bzzbe: high-quality fallback tier for 24GB+ Macs.
 
-### 4) Mistral 7B
+### 4) GPT-OSS (20B/120B)
 
-- Strengths: mature open model, compact, reliable baseline.
-- Observed Ollama package size: ~4.4GB.
-- Best use in Bzzbe: backup balanced-tier option if other models are unavailable.
+- Strengths: current open-weight flagship family.
+- Observed Ollama package sizes: ~13GB (20B), ~65GB (120B).
+- Best use in Bzzbe: optional "power user" pack for 32GB+ Macs after v1 defaults are stable.
 
-### 5) Phi-4 (14B)
+### 5) Mistral Small 3.1 (24B)
 
-- Strengths: high quality general assistant model for local use.
-- Observed Ollama package size: ~9.1GB.
-- Best use in Bzzbe: optional high-quality text-only alternative.
+- Strengths: high-quality compact frontier model with strong multilingual/coding behavior.
+- Observed Ollama package size: ~15GB.
+- Best use in Bzzbe: optional 32GB+ text+vision pack.
 
-### 6) DeepSeek-R1 distilled family
+### 6) Qwen 2.5 (legacy fallback family)
 
-- Strengths: reasoning-heavy options; many sizes available.
-- Observed Ollama package sizes range from ~1.1GB to very large variants (40GB+).
-- Best use in Bzzbe: optional advanced "reasoning" add-on after v1 stability.
+- Strengths: stable, widely deployed fallback for existing local setups.
+- Observed Ollama package sizes (selected): ~4.7GB (7B), ~9.0GB (14B).
+- Best use in Bzzbe: balanced-tier fallback to reduce upgrade risk.
 
 ## Hardware-tier recommendation (v1)
 
 Current v1 installer mapping adopted in code:
 
-- **Small tier (8-15GB RAM)**: `llama3.2:3b-instruct-q4_K_M` (~2.0GB)
-- **Balanced tier (16-23GB RAM)**: `qwen2.5:7b-instruct-q4_K_M` (~4.7GB)
-- **High quality tier (24GB+ RAM)**: `gemma3:12b-it-q4_K_M` (~8.1GB)
+- **Small tier (8-15GB RAM)**:
+  - Primary: `qwen3:4b` (~2.6GB)
+  - Fallback: `phi4-mini:3.8b-instruct-q4_K_M` (~2.5GB)
+- **Balanced tier (16-23GB RAM)**:
+  - Primary: `qwen3:8b` (~5.2GB)
+  - Fallback: `qwen2.5:7b-instruct-q4_K_M` (~4.7GB)
+- **High quality tier (24GB+ RAM)**:
+  - Primary: `qwen3:14b` (~9.3GB)
+  - Fallback: `gemma3:12b-it-q4_K_M` (~8.1GB)
 
 Safety rule used for first-pass install eligibility: require approximately `2x` model download size in free disk before installation.
 

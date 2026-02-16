@@ -66,11 +66,25 @@ public protocol Installing {
 public struct InstallerService: Installing {
     public static let defaultCatalog: [ModelCandidate] = [
         .init(
-            id: "llama3.2:3b-instruct-q4_K_M",
-            displayName: "Llama 3.2 3B Instruct (Q4_K_M)",
-            approximateDownloadSizeGB: 2.0,
+            id: "qwen3:4b",
+            displayName: "Qwen 3 4B",
+            approximateDownloadSizeGB: 2.6,
             minimumMemoryGB: 8,
             tier: .small
+        ),
+        .init(
+            id: "phi4-mini:3.8b-instruct-q4_K_M",
+            displayName: "Phi-4 Mini 3.8B Instruct (Q4_K_M)",
+            approximateDownloadSizeGB: 2.5,
+            minimumMemoryGB: 8,
+            tier: .small
+        ),
+        .init(
+            id: "qwen3:8b",
+            displayName: "Qwen 3 8B",
+            approximateDownloadSizeGB: 5.2,
+            minimumMemoryGB: 16,
+            tier: .balanced
         ),
         .init(
             id: "qwen2.5:7b-instruct-q4_K_M",
@@ -78,6 +92,13 @@ public struct InstallerService: Installing {
             approximateDownloadSizeGB: 4.7,
             minimumMemoryGB: 16,
             tier: .balanced
+        ),
+        .init(
+            id: "qwen3:14b",
+            displayName: "Qwen 3 14B",
+            approximateDownloadSizeGB: 9.3,
+            minimumMemoryGB: 24,
+            tier: .highQuality
         ),
         .init(
             id: "gemma3:12b-it-q4_K_M",
