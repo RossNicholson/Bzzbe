@@ -40,11 +40,11 @@ final class ChatViewModel: ObservableObject {
     private var conversationIDByRequestID: [UUID: String] = [:]
 
     init(
-        inferenceClient: any InferenceClient = MockInferenceClient(),
+        inferenceClient: any InferenceClient = LocalRuntimeInferenceClient(),
         conversationStore: any ConversationStoring = ChatViewModel.defaultConversationStore(),
         model: InferenceModelDescriptor = InferenceModelDescriptor(
-            identifier: "mock.qwen2.5-3b",
-            displayName: "Mock Qwen 2.5 3B",
+            identifier: "qwen2.5:7b-instruct-q4_K_M",
+            displayName: "Qwen 2.5 7B Instruct",
             contextWindow: 32_768
         )
     ) {
