@@ -47,7 +47,8 @@ Bzzbe is an open-source macOS app (Apple Silicon only) that installs and runs lo
 - ✅ JOB-005 complete: hardened inference abstraction with cancellable streaming request model.
 - ✅ JOB-006 complete: chat route now supports prompt send, streaming response rendering, stop, and retry controls.
 - ✅ JOB-011 complete: SQLite conversation storage with CRUD operations, test coverage, and chat persistence/restore wiring.
-- 🔜 Next: JOB-007 first-run installer UX.
+- ✅ JOB-007 complete: first-run onboarding flow with hardware-aware recommendation, install progress, and failure/retry states.
+- 🔜 Next: JOB-008 download manager with resume.
 
 ## Early roadmap summary
 
