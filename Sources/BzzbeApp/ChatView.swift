@@ -33,6 +33,7 @@ final class ChatViewModel: ObservableObject {
     private let inferenceClient: any InferenceClient
     private var streamTask: Task<Void, Never>?
     private var assistantMessageID: UUID?
+    private var activeRequestID: UUID?
 
     init(
         inferenceClient: any InferenceClient = MockInferenceClient(),
@@ -68,6 +69,8 @@ final class ChatViewModel: ObservableObject {
 
     func stopStreaming() {
         guard isStreaming else { return }
+        activeRequestID = nil
+        assistantMessageID = nil
         streamTask?.cancel()
         streamTask = nil
         isStreaming = false
@@ -92,6 +95,8 @@ final class ChatViewModel: ObservableObject {
         let pendingAssistant = Message(role: .assistant, content: "")
         messages.append(pendingAssistant)
         assistantMessageID = pendingAssistant.id
+        let requestID = UUID()
+        activeRequestID = requestID
         isStreaming = true
 
         streamTask = Task { [weak self] in
@@ -101,13 +106,13 @@ final class ChatViewModel: ObservableObject {
                 try await self.inferenceClient.loadModel(self.model)
                 let stream = await self.inferenceClient.streamCompletion(request)
                 for try await event in stream {
-                    self.handle(event: event)
+                    self.handle(event: event, requestID: requestID)
                 }
-                self.finishStreamingIfNeeded()
+                self.finishStreamingIfNeeded(for: requestID)
             } catch is CancellationError {
-                self.finishStreamingIfNeeded()
+                self.finishStreamingIfNeeded(for: requestID)
             } catch {
-                self.failStreaming(error: error)
+                self.failStreaming(error: error, requestID: requestID)
             }
         }
     }
@@ -121,35 +126,43 @@ final class ChatViewModel: ObservableObject {
             }
     }
 
-    private func handle(event: InferenceEvent) {
+    private func handle(event: InferenceEvent, requestID: UUID) {
+        guard isActiveRequest(requestID) else { return }
         switch event {
         case .started:
             return
         case let .token(token):
-            appendAssistantToken(token)
+            appendAssistantToken(token, requestID: requestID)
         case .completed:
-            finishStreamingIfNeeded()
+            finishStreamingIfNeeded(for: requestID)
         case .cancelled:
-            finishStreamingIfNeeded()
+            finishStreamingIfNeeded(for: requestID)
         }
     }
 
-    private func appendAssistantToken(_ token: String) {
+    private func appendAssistantToken(_ token: String, requestID: UUID) {
+        guard isActiveRequest(requestID) else { return }
         guard let assistantMessageID else { return }
         guard let index = messages.firstIndex(where: { $0.id == assistantMessageID }) else { return }
         messages[index].content += token
     }
 
-    private func finishStreamingIfNeeded() {
-        guard isStreaming || streamTask != nil || assistantMessageID != nil else { return }
+    private func finishStreamingIfNeeded(for requestID: UUID) {
+        guard isActiveRequest(requestID) else { return }
         isStreaming = false
         streamTask = nil
         assistantMessageID = nil
+        activeRequestID = nil
     }
 
-    private func failStreaming(error: Error) {
+    private func failStreaming(error: Error, requestID: UUID) {
+        guard isActiveRequest(requestID) else { return }
         errorMessage = "Generation failed. \(error.localizedDescription)"
-        finishStreamingIfNeeded()
+        finishStreamingIfNeeded(for: requestID)
+    }
+
+    private func isActiveRequest(_ requestID: UUID) -> Bool {
+        activeRequestID == requestID
     }
 }
 
