@@ -7,19 +7,22 @@ struct RuntimeBootstrapConfiguration: Sendable, Equatable {
     let runtimeDownloadURL: URL
     let runtimeArchiveFileName: String
     let reachabilityTimeoutSeconds: TimeInterval
+    let reachabilityPollIntervalSeconds: TimeInterval
 
     init(
         runtimeBaseURL: URL = URL(string: "http://127.0.0.1:11434")!,
         runtimeHealthPath: String = "/api/tags",
         runtimeDownloadURL: URL = URL(string: "https://ollama.com/download/Ollama-darwin.zip")!,
         runtimeArchiveFileName: String = "Ollama-darwin.zip",
-        reachabilityTimeoutSeconds: TimeInterval = 2
+        reachabilityTimeoutSeconds: TimeInterval = 2,
+        reachabilityPollIntervalSeconds: TimeInterval = 1
     ) {
         self.runtimeBaseURL = runtimeBaseURL
         self.runtimeHealthPath = runtimeHealthPath
         self.runtimeDownloadURL = runtimeDownloadURL
         self.runtimeArchiveFileName = runtimeArchiveFileName
         self.reachabilityTimeoutSeconds = max(1, reachabilityTimeoutSeconds)
+        self.reachabilityPollIntervalSeconds = max(0.25, reachabilityPollIntervalSeconds)
     }
 }
 
@@ -229,22 +232,15 @@ actor OllamaRuntimeBootstrapper: RuntimeBootstrapping {
     }
 
     private func launchRuntime(at appURL: URL) throws {
-        if let runtimeServeProcess, runtimeServeProcess.isRunning {
-            return
+        if let runtimeServeProcess {
+            if runtimeServeProcess.isRunning {
+                return
+            }
+            self.runtimeServeProcess = nil
         }
 
-        let runtimeExecutableURL = appURL
-            .appendingPathComponent("Contents", isDirectory: true)
-            .appendingPathComponent("MacOS", isDirectory: true)
-            .appendingPathComponent("ollama", isDirectory: false)
-
-        if fileManager.fileExists(atPath: runtimeExecutableURL.path) {
-            let serveProcess = Process()
-            serveProcess.executableURL = runtimeExecutableURL
-            serveProcess.arguments = ["serve"]
-            serveProcess.standardOutput = Pipe()
-            serveProcess.standardError = Pipe()
-            try serveProcess.run()
+        if let runtimeExecutableURL = runtimeServeExecutableURL(for: appURL),
+           let serveProcess = try launchServeProcess(executableURL: runtimeExecutableURL) {
             runtimeServeProcess = serveProcess
             return
         }
@@ -256,6 +252,48 @@ actor OllamaRuntimeBootstrapper: RuntimeBootstrapping {
         process.waitUntilExit()
     }
 
+    private func runtimeServeExecutableURL(for appURL: URL) -> URL? {
+        let contentsURL = appURL.appendingPathComponent("Contents", isDirectory: true)
+        let candidates = [
+            contentsURL
+                .appendingPathComponent("Resources", isDirectory: true)
+                .appendingPathComponent("ollama", isDirectory: false),
+            contentsURL
+                .appendingPathComponent("MacOS", isDirectory: true)
+                .appendingPathComponent("ollama", isDirectory: false)
+        ]
+
+        return candidates.first(where: { fileManager.fileExists(atPath: $0.path) })
+    }
+
+    private func launchServeProcess(executableURL: URL) throws -> Process? {
+        let serveProcess = Process()
+        serveProcess.executableURL = executableURL
+        serveProcess.arguments = ["serve"]
+        serveProcess.standardOutput = Pipe()
+        serveProcess.standardError = Pipe()
+        try serveProcess.run()
+
+        Thread.sleep(forTimeInterval: 0.3)
+        guard serveProcess.isRunning else {
+            return nil
+        }
+
+        serveProcess.terminationHandler = { [weak self] _ in
+            guard let self else { return }
+            Task {
+                await self.clearRuntimeServeProcessIfMatches(serveProcess)
+            }
+        }
+        return serveProcess
+    }
+
+    private func clearRuntimeServeProcessIfMatches(_ process: Process) {
+        if runtimeServeProcess === process {
+            runtimeServeProcess = nil
+        }
+    }
+
     private func waitForRuntimeReachable(timeoutSeconds: TimeInterval) async -> Bool {
         let clock = ContinuousClock()
         let timeout = Duration.seconds(timeoutSeconds)
@@ -265,7 +303,7 @@ actor OllamaRuntimeBootstrapper: RuntimeBootstrapping {
             if await isRuntimeReachable() {
                 return true
             }
-            try? await Task.sleep(for: .milliseconds(500))
+            try? await Task.sleep(for: .milliseconds(Int(configuration.reachabilityPollIntervalSeconds * 1_000)))
         }
 
         return await isRuntimeReachable()
