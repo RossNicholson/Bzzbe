@@ -3,15 +3,18 @@ import Foundation
 public struct RuntimeModelImportConfiguration: Sendable, Equatable {
     public let baseURL: URL
     public let createPath: String
+    public let blobUploadPathPrefix: String
     public let timeoutSeconds: TimeInterval
 
     public init(
         baseURL: URL = URL(string: "http://127.0.0.1:11434")!,
         createPath: String = "/api/create",
+        blobUploadPathPrefix: String = "/api/blobs/sha256:",
         timeoutSeconds: TimeInterval = 60 * 15
     ) {
         self.baseURL = baseURL
         self.createPath = createPath
+        self.blobUploadPathPrefix = blobUploadPathPrefix
         self.timeoutSeconds = timeoutSeconds
     }
 }
@@ -52,15 +55,18 @@ public protocol RuntimeModelImporting: Sendable {
 public actor OllamaModelImportClient: RuntimeModelImporting {
     private let configuration: RuntimeModelImportConfiguration
     private let urlSession: URLSession
+    private let artifactVerifier: ArtifactVerifying
     private var currentTask: Task<Void, Never>?
     private var currentContinuation: AsyncThrowingStream<RuntimeModelImportEvent, Error>.Continuation?
 
     public init(
         configuration: RuntimeModelImportConfiguration = .init(),
-        urlSession: URLSession = .shared
+        urlSession: URLSession = .shared,
+        artifactVerifier: ArtifactVerifying = ArtifactVerifier()
     ) {
         self.configuration = configuration
         self.urlSession = urlSession
+        self.artifactVerifier = artifactVerifier
     }
 
     public func importModel(modelID: String, artifactFileURL: URL) async -> AsyncThrowingStream<RuntimeModelImportEvent, Error> {
@@ -109,6 +115,14 @@ public actor OllamaModelImportClient: RuntimeModelImporting {
         artifactFileURL: URL,
         continuation: AsyncThrowingStream<RuntimeModelImportEvent, Error>.Continuation
     ) async throws {
+        guard FileManager.default.fileExists(atPath: artifactFileURL.path) else {
+            throw RuntimeModelImportError.unavailable("Downloaded artifact file was not found at \(artifactFileURL.path).")
+        }
+
+        let sha256Digest = try artifactVerifier.checksum(for: artifactFileURL, algorithm: .sha256)
+        try await uploadArtifactBlob(fileURL: artifactFileURL, sha256Digest: sha256Digest)
+        continuation.yield(.status("Uploaded model artifact to local runtime."))
+
         let createURL = configuration.baseURL.appending(path: trimmedLeadingSlash(configuration.createPath))
         var request = URLRequest(url: createURL)
         request.httpMethod = "POST"
@@ -117,7 +131,7 @@ public actor OllamaModelImportClient: RuntimeModelImporting {
         request.httpBody = try JSONEncoder().encode(
             CreateModelRequest(
                 model: modelID,
-                from: artifactFileURL.path
+                files: [modelLayerFileName(for: artifactFileURL): "sha256:\(sha256Digest)"]
             )
         )
 
@@ -127,6 +141,13 @@ public actor OllamaModelImportClient: RuntimeModelImporting {
                 throw RuntimeModelImportError.invalidResponse
             }
             guard (200..<300).contains(httpResponse.statusCode) else {
+                var responseData = Data()
+                for try await rawLine in bytes.lines {
+                    responseData.append(contentsOf: rawLine.utf8)
+                }
+                if let runtimeError = runtimeErrorMessage(from: responseData) {
+                    throw RuntimeModelImportError.runtime(runtimeError)
+                }
                 throw RuntimeModelImportError.invalidResponseStatus(httpResponse.statusCode)
             }
 
@@ -152,6 +173,51 @@ public actor OllamaModelImportClient: RuntimeModelImporting {
         }
     }
 
+    private func uploadArtifactBlob(fileURL: URL, sha256Digest: String) async throws {
+        let path = trimmedLeadingSlash(configuration.blobUploadPathPrefix) + sha256Digest
+        let blobURL = configuration.baseURL.appending(path: path)
+        var request = URLRequest(url: blobURL)
+        request.httpMethod = "POST"
+        request.timeoutInterval = configuration.timeoutSeconds
+        request.setValue("application/octet-stream", forHTTPHeaderField: "Content-Type")
+
+        do {
+            let (data, response) = try await urlSession.upload(for: request, fromFile: fileURL)
+            guard let httpResponse = response as? HTTPURLResponse else {
+                throw RuntimeModelImportError.invalidResponse
+            }
+            guard (200..<300).contains(httpResponse.statusCode) else {
+                if let runtimeError = runtimeErrorMessage(from: data) {
+                    throw RuntimeModelImportError.runtime(runtimeError)
+                }
+                throw RuntimeModelImportError.invalidResponseStatus(httpResponse.statusCode)
+            }
+        } catch let error as RuntimeModelImportError {
+            throw error
+        } catch {
+            throw RuntimeModelImportError.unavailable(error.localizedDescription)
+        }
+    }
+
+    private func modelLayerFileName(for artifactFileURL: URL) -> String {
+        let candidate = artifactFileURL.lastPathComponent
+            .trimmingCharacters(in: .whitespacesAndNewlines)
+
+        if candidate.isEmpty {
+            return "model.gguf"
+        }
+        if candidate.lowercased().hasSuffix(".gguf") {
+            return candidate
+        }
+        return candidate + ".gguf"
+    }
+
+    private func runtimeErrorMessage(from data: Data) -> String? {
+        guard !data.isEmpty else { return nil }
+        let payload = try? JSONDecoder().decode(CreateStreamEnvelope.self, from: data)
+        return payload?.error
+    }
+
     private func clearCurrentImportState() {
         currentTask = nil
         currentContinuation = nil
@@ -167,7 +233,7 @@ public actor OllamaModelImportClient: RuntimeModelImporting {
 
 private struct CreateModelRequest: Encodable {
     let model: String
-    let from: String
+    let files: [String: String]
     let stream: Bool = true
 }
 
