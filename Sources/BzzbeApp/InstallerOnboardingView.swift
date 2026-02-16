@@ -23,14 +23,21 @@ final class InstallerOnboardingViewModel: ObservableObject {
     let profile: CapabilityProfile
 
     private let installerService: Installing
+    private let artifactDownloader: ArtifactDownloading
+    private let fileManager: FileManager
     private var installTask: Task<Void, Never>?
+    private var activeDownloadID: String?
 
     init(
         profile: CapabilityProfile,
-        installerService: Installing = InstallerService()
+        installerService: Installing = InstallerService(),
+        artifactDownloader: ArtifactDownloading = ResumableArtifactDownloadManager(),
+        fileManager: FileManager = .default
     ) {
         self.profile = profile
         self.installerService = installerService
+        self.artifactDownloader = artifactDownloader
+        self.fileManager = fileManager
         self.recommendation = installerService.recommendedInstall(for: profile)
     }
 
@@ -62,6 +69,9 @@ final class InstallerOnboardingViewModel: ObservableObject {
     func cancelInstall() {
         guard isInstalling else { return }
         statusText = "Cancelling setup..."
+        if let activeDownloadID {
+            artifactDownloader.cancelDownload(id: activeDownloadID)
+        }
         installTask?.cancel()
         installTask = nil
     }
@@ -77,39 +87,138 @@ final class InstallerOnboardingViewModel: ObservableObject {
         statusText = "Preparing setup..."
 
         do {
-            for phase in setupPhases {
-                try Task.checkCancellation()
-                statusText = phase.label
-                progress = phase.progress
-                try await Task.sleep(nanoseconds: phase.delayNanoseconds)
+            guard let candidate = recommendation.candidate else {
+                throw InstallationFlowError.missingCandidate
             }
 
-            statusText = "Setup complete."
-            progress = 1
-            isInstalling = false
-            step = .completed
-            installTask = nil
+            let request = try makeDownloadRequest(for: candidate)
+            activeDownloadID = request.id
+            var completed = false
+
+            let stream = artifactDownloader.startDownload(request)
+            for try await event in stream {
+                try Task.checkCancellation()
+                switch event {
+                case let .started(resumedBytes, totalBytes):
+                    progress = fraction(numerator: resumedBytes, denominator: totalBytes)
+                    if resumedBytes > 0 {
+                        statusText = "Resuming download (\(resumedBytes / 1024)KB already downloaded)"
+                    } else {
+                        statusText = "Starting download..."
+                    }
+                case let .progress(bytesWritten, totalBytes):
+                    progress = fraction(numerator: bytesWritten, denominator: totalBytes)
+                    statusText = "Downloading model package..."
+                case .completed:
+                    progress = 1
+                    statusText = "Download complete. Finalizing setup..."
+                    completed = true
+                }
+            }
+
+            if completed {
+                statusText = "Setup complete."
+                isInstalling = false
+                step = .completed
+                installTask = nil
+                activeDownloadID = nil
+            } else if Task.isCancelled {
+                throw CancellationError()
+            } else {
+                throw InstallationFlowError.downloadEndedUnexpectedly
+            }
         } catch is CancellationError {
             isInstalling = false
             step = .failed(message: "Setup was cancelled. You can retry safely.")
             statusText = "Setup cancelled."
             installTask = nil
+            activeDownloadID = nil
         } catch {
             isInstalling = false
             step = .failed(message: "Setup failed: \(error.localizedDescription)")
             statusText = "Setup failed."
             installTask = nil
+            activeDownloadID = nil
         }
     }
 
-    private var setupPhases: [(label: String, progress: Double, delayNanoseconds: UInt64)] {
-        [
-            ("Validating local environment", 0.15, 400_000_000),
-            ("Preparing runtime workspace", 0.35, 500_000_000),
-            ("Downloading recommended model package", 0.65, 700_000_000),
-            ("Configuring local runtime", 0.85, 500_000_000),
-            ("Finalizing installation", 1.0, 350_000_000)
-        ]
+    private func makeDownloadRequest(for candidate: ModelCandidate) throws -> ArtifactDownloadRequest {
+        let root = try installerWorkspaceRoot()
+        let sourceDirectory = root.appendingPathComponent("seed-artifacts", isDirectory: true)
+        let destinationDirectory = root.appendingPathComponent("downloads", isDirectory: true)
+        try fileManager.createDirectory(at: sourceDirectory, withIntermediateDirectories: true)
+        try fileManager.createDirectory(at: destinationDirectory, withIntermediateDirectories: true)
+
+        let safeIdentifier = sanitizedIdentifier(candidate.id)
+        let seedURL = sourceDirectory.appendingPathComponent("\(safeIdentifier).seed", isDirectory: false)
+        let destinationURL = destinationDirectory.appendingPathComponent("\(safeIdentifier).artifact", isDirectory: false)
+
+        try ensureSeedArtifactExists(at: seedURL, approximateSizeGB: candidate.approximateDownloadSizeGB)
+
+        return ArtifactDownloadRequest(
+            id: "installer.\(safeIdentifier)",
+            sourceURL: seedURL,
+            destinationURL: destinationURL
+        )
+    }
+
+    private func installerWorkspaceRoot() throws -> URL {
+        let base = fileManager.urls(for: .applicationSupportDirectory, in: .userDomainMask).first
+            ?? fileManager.temporaryDirectory
+        let root = base.appendingPathComponent("Bzzbe", isDirectory: true)
+            .appendingPathComponent("installer", isDirectory: true)
+        try fileManager.createDirectory(at: root, withIntermediateDirectories: true)
+        return root
+    }
+
+    private func ensureSeedArtifactExists(at url: URL, approximateSizeGB: Double) throws {
+        let byteCount = targetSeedArtifactBytes(approximateSizeGB: approximateSizeGB)
+
+        if fileManager.fileExists(atPath: url.path),
+           let existingSize = try? fileSize(at: url),
+           existingSize == byteCount {
+            return
+        }
+
+        if fileManager.fileExists(atPath: url.path) {
+            try fileManager.removeItem(at: url)
+        }
+
+        fileManager.createFile(atPath: url.path, contents: nil)
+        let handle = try FileHandle(forWritingTo: url)
+        defer { try? handle.close() }
+
+        var remaining = byteCount
+        let chunk = Data(repeating: 0x42, count: 64 * 1024)
+        while remaining > 0 {
+            let sliceCount = min(chunk.count, remaining)
+            try handle.write(contentsOf: chunk.prefix(sliceCount))
+            remaining -= sliceCount
+        }
+    }
+
+    private func targetSeedArtifactBytes(approximateSizeGB: Double) -> Int {
+        let baseline = Int(max(1.0, approximateSizeGB) * 350_000)
+        return max(512 * 1024, min(4 * 1024 * 1024, baseline))
+    }
+
+    private func fileSize(at url: URL) throws -> Int {
+        let values = try url.resourceValues(forKeys: [.fileSizeKey])
+        return values.fileSize ?? 0
+    }
+
+    private func sanitizedIdentifier(_ value: String) -> String {
+        let sanitized = value.replacingOccurrences(
+            of: #"[^A-Za-z0-9._-]"#,
+            with: "_",
+            options: .regularExpression
+        )
+        return sanitized.isEmpty ? "artifact" : sanitized
+    }
+
+    private func fraction(numerator: Int64, denominator: Int64) -> Double {
+        guard denominator > 0 else { return 0 }
+        return min(1, max(0, Double(numerator) / Double(denominator)))
     }
 
     private func insufficientResourcesMessage() -> String {
@@ -117,6 +226,11 @@ final class InstallerOnboardingViewModel: ObservableObject {
         let disk = recommendation.minimumRequiredDiskGB.map { "\($0)GB free disk" } ?? "unknown disk space"
         return "This Mac currently does not meet minimum requirements (\(memory), \(disk))."
     }
+}
+
+private enum InstallationFlowError: Error {
+    case missingCandidate
+    case downloadEndedUnexpectedly
 }
 
 struct InstallerOnboardingView: View {
