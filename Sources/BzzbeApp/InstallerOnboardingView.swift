@@ -25,6 +25,7 @@ final class InstallerOnboardingViewModel: ObservableObject {
     private let installerService: Installing
     private let artifactDownloader: ArtifactDownloading
     private let artifactVerifier: ArtifactVerifying
+    private let installedModelStore: InstalledModelStoring
     private let fileManager: FileManager
     private var installTask: Task<Void, Never>?
     private var activeDownloadID: String?
@@ -34,12 +35,14 @@ final class InstallerOnboardingViewModel: ObservableObject {
         installerService: Installing = InstallerService(),
         artifactDownloader: ArtifactDownloading = ResumableArtifactDownloadManager(),
         artifactVerifier: ArtifactVerifying = ArtifactVerifier(),
+        installedModelStore: InstalledModelStoring = JSONInstalledModelStore.defaultStore(),
         fileManager: FileManager = .default
     ) {
         self.profile = profile
         self.installerService = installerService
         self.artifactDownloader = artifactDownloader
         self.artifactVerifier = artifactVerifier
+        self.installedModelStore = installedModelStore
         self.fileManager = fileManager
         self.recommendation = installerService.recommendedInstall(for: profile)
     }
@@ -126,6 +129,8 @@ final class InstallerOnboardingViewModel: ObservableObject {
                     try? fileManager.removeItem(at: plan.request.destinationURL)
                     throw error
                 }
+
+                try persistInstalledModelMetadata(plan)
                 statusText = "Verification passed. Setup complete."
                 isInstalling = false
                 step = .completed
@@ -152,6 +157,8 @@ final class InstallerOnboardingViewModel: ObservableObject {
     }
 
     private struct DownloadPlan {
+        let candidate: ModelCandidate
+        let tier: String
         let request: ArtifactDownloadRequest
         let expectedChecksum: ArtifactChecksum
     }
@@ -172,6 +179,8 @@ final class InstallerOnboardingViewModel: ObservableObject {
         let expectedChecksum = try ArtifactChecksum(value: expectedSHA256)
 
         return DownloadPlan(
+            candidate: candidate,
+            tier: recommendation.tier ?? candidate.tier.rawValue,
             request: ArtifactDownloadRequest(
                 id: "installer.\(safeIdentifier)",
                 sourceURL: seedURL,
@@ -179,6 +188,17 @@ final class InstallerOnboardingViewModel: ObservableObject {
             ),
             expectedChecksum: expectedChecksum
         )
+    }
+
+    private func persistInstalledModelMetadata(_ plan: DownloadPlan) throws {
+        let record = InstalledModelRecord(
+            modelID: plan.candidate.id,
+            tier: plan.tier,
+            artifactPath: plan.request.destinationURL.path,
+            checksumSHA256: plan.expectedChecksum.value,
+            version: "1"
+        )
+        try installedModelStore.save(record: record)
     }
 
     private func installerWorkspaceRoot() throws -> URL {
