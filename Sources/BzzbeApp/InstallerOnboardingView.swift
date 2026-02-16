@@ -24,6 +24,7 @@ final class InstallerOnboardingViewModel: ObservableObject {
 
     private let installerService: Installing
     private let artifactDownloader: ArtifactDownloading
+    private let artifactVerifier: ArtifactVerifying
     private let fileManager: FileManager
     private var installTask: Task<Void, Never>?
     private var activeDownloadID: String?
@@ -32,11 +33,13 @@ final class InstallerOnboardingViewModel: ObservableObject {
         profile: CapabilityProfile,
         installerService: Installing = InstallerService(),
         artifactDownloader: ArtifactDownloading = ResumableArtifactDownloadManager(),
+        artifactVerifier: ArtifactVerifying = ArtifactVerifier(),
         fileManager: FileManager = .default
     ) {
         self.profile = profile
         self.installerService = installerService
         self.artifactDownloader = artifactDownloader
+        self.artifactVerifier = artifactVerifier
         self.fileManager = fileManager
         self.recommendation = installerService.recommendedInstall(for: profile)
     }
@@ -91,11 +94,11 @@ final class InstallerOnboardingViewModel: ObservableObject {
                 throw InstallationFlowError.missingCandidate
             }
 
-            let request = try makeDownloadRequest(for: candidate)
-            activeDownloadID = request.id
+            let plan = try makeDownloadPlan(for: candidate)
+            activeDownloadID = plan.request.id
             var completed = false
 
-            let stream = artifactDownloader.startDownload(request)
+            let stream = artifactDownloader.startDownload(plan.request)
             for try await event in stream {
                 try Task.checkCancellation()
                 switch event {
@@ -111,13 +114,19 @@ final class InstallerOnboardingViewModel: ObservableObject {
                     statusText = "Downloading model package..."
                 case .completed:
                     progress = 1
-                    statusText = "Download complete. Finalizing setup..."
+                    statusText = "Download complete. Verifying artifact..."
                     completed = true
                 }
             }
 
             if completed {
-                statusText = "Setup complete."
+                do {
+                    try artifactVerifier.verify(fileURL: plan.request.destinationURL, against: plan.expectedChecksum)
+                } catch {
+                    try? fileManager.removeItem(at: plan.request.destinationURL)
+                    throw error
+                }
+                statusText = "Verification passed. Setup complete."
                 isInstalling = false
                 step = .completed
                 installTask = nil
@@ -142,7 +151,12 @@ final class InstallerOnboardingViewModel: ObservableObject {
         }
     }
 
-    private func makeDownloadRequest(for candidate: ModelCandidate) throws -> ArtifactDownloadRequest {
+    private struct DownloadPlan {
+        let request: ArtifactDownloadRequest
+        let expectedChecksum: ArtifactChecksum
+    }
+
+    private func makeDownloadPlan(for candidate: ModelCandidate) throws -> DownloadPlan {
         let root = try installerWorkspaceRoot()
         let sourceDirectory = root.appendingPathComponent("seed-artifacts", isDirectory: true)
         let destinationDirectory = root.appendingPathComponent("downloads", isDirectory: true)
@@ -154,11 +168,16 @@ final class InstallerOnboardingViewModel: ObservableObject {
         let destinationURL = destinationDirectory.appendingPathComponent("\(safeIdentifier).artifact", isDirectory: false)
 
         try ensureSeedArtifactExists(at: seedURL, approximateSizeGB: candidate.approximateDownloadSizeGB)
+        let expectedSHA256 = try artifactVerifier.checksum(for: seedURL, algorithm: .sha256)
+        let expectedChecksum = try ArtifactChecksum(value: expectedSHA256)
 
-        return ArtifactDownloadRequest(
-            id: "installer.\(safeIdentifier)",
-            sourceURL: seedURL,
-            destinationURL: destinationURL
+        return DownloadPlan(
+            request: ArtifactDownloadRequest(
+                id: "installer.\(safeIdentifier)",
+                sourceURL: seedURL,
+                destinationURL: destinationURL
+            ),
+            expectedChecksum: expectedChecksum
         )
     }
 
