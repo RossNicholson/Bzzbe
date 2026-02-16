@@ -16,11 +16,23 @@ final class InstallerOnboardingViewModel: ObservableObject {
 
     @Published private(set) var step: Step = .intro
     @Published private(set) var recommendation: InstallRecommendation
+    @Published private(set) var availableCandidates: [ModelCandidate]
+    @Published private(set) var recommendedCandidateID: String?
+    @Published private(set) var selectedCandidateID: String?
     @Published private(set) var progress: Double = 0
     @Published private(set) var statusText: String = "Ready to start setup."
     @Published private(set) var isInstalling: Bool = false
 
     let profile: CapabilityProfile
+
+    var selectedCandidate: ModelCandidate? {
+        guard let selectedCandidateID else { return nil }
+        return availableCandidates.first(where: { $0.id == selectedCandidateID })
+    }
+
+    var isUsingRecommendedCandidate: Bool {
+        selectedCandidateID == recommendedCandidateID
+    }
 
     private let installerService: Installing
     private let artifactDownloader: ArtifactDownloading
@@ -47,7 +59,12 @@ final class InstallerOnboardingViewModel: ObservableObject {
         self.installedModelStore = installedModelStore
         self.actionLogStore = actionLogStore
         self.fileManager = fileManager
-        self.recommendation = installerService.recommendedInstall(for: profile)
+        let recommendation = installerService.recommendedInstall(for: profile)
+        self.recommendation = recommendation
+        let availableCandidates = installerService.compatibleCandidates(for: profile)
+        self.availableCandidates = availableCandidates
+        self.recommendedCandidateID = recommendation.candidate?.id
+        self.selectedCandidateID = recommendation.candidate?.id ?? availableCandidates.first?.id
     }
 
     deinit {
@@ -60,11 +77,26 @@ final class InstallerOnboardingViewModel: ObservableObject {
 
     func refreshRecommendation() {
         recommendation = installerService.recommendedInstall(for: profile)
+        availableCandidates = installerService.compatibleCandidates(for: profile)
+        recommendedCandidateID = recommendation.candidate?.id
+
+        if let selectedCandidateID,
+           availableCandidates.contains(where: { $0.id == selectedCandidateID }) {
+            self.selectedCandidateID = selectedCandidateID
+        } else {
+            self.selectedCandidateID = recommendation.candidate?.id ?? availableCandidates.first?.id
+        }
+
         step = .recommendation
     }
 
+    func selectCandidate(id: String) {
+        guard availableCandidates.contains(where: { $0.id == id }) else { return }
+        selectedCandidateID = id
+    }
+
     func startInstall() {
-        guard recommendation.status == .ready else {
+        guard recommendation.status == .ready, let candidate = selectedCandidate else {
             logAction(
                 category: "install.blocked",
                 message: "Install blocked due to insufficient resources: \(insufficientResourcesMessage())"
@@ -75,7 +107,7 @@ final class InstallerOnboardingViewModel: ObservableObject {
 
         installTask?.cancel()
         installTask = Task { [weak self] in
-            await self?.performInstallFlow()
+            await self?.performInstallFlow(candidate: candidate)
         }
     }
 
@@ -93,17 +125,13 @@ final class InstallerOnboardingViewModel: ObservableObject {
         startInstall()
     }
 
-    private func performInstallFlow() async {
+    private func performInstallFlow(candidate: ModelCandidate) async {
         progress = 0
         isInstalling = true
         step = .installing
         statusText = "Preparing setup..."
 
         do {
-            guard let candidate = recommendation.candidate else {
-                throw InstallationFlowError.missingCandidate
-            }
-
             let plan = try makeDownloadPlan(for: candidate)
             logAction(
                 category: "install.started",
@@ -228,7 +256,7 @@ final class InstallerOnboardingViewModel: ObservableObject {
 
         return DownloadPlan(
             candidate: candidate,
-            tier: recommendation.tier ?? candidate.tier.rawValue,
+            tier: candidate.tier.rawValue,
             request: ArtifactDownloadRequest(
                 id: "installer.\(safeIdentifier)",
                 sourceURL: seedURL,
@@ -321,7 +349,6 @@ final class InstallerOnboardingViewModel: ObservableObject {
 }
 
 private enum InstallationFlowError: Error {
-    case missingCandidate
     case downloadEndedUnexpectedly
 }
 
@@ -399,8 +426,8 @@ struct InstallerOnboardingView: View {
     private var recommendationStep: some View {
         switch viewModel.recommendation.status {
         case .ready:
-            if let candidate = viewModel.recommendation.candidate {
-                VStack(alignment: .leading, spacing: 14) {
+            VStack(alignment: .leading, spacing: 14) {
+                if let candidate = viewModel.recommendation.candidate {
                     GroupBox("Recommended Profile") {
                         VStack(alignment: .leading, spacing: 8) {
                             Text(candidate.displayName)
@@ -413,23 +440,72 @@ struct InstallerOnboardingView: View {
                         }
                         .frame(maxWidth: .infinity, alignment: .leading)
                     }
+                }
 
-                    HStack(spacing: 10) {
-                        Button("Install") {
-                            viewModel.startInstall()
+                if !viewModel.availableCandidates.isEmpty {
+                    GroupBox("Model Selection") {
+                        VStack(alignment: .leading, spacing: 8) {
+                            Text("Default selection is based on your hardware. You can override it.")
+                                .foregroundStyle(.secondary)
+                            Picker(
+                                "Model",
+                                selection: Binding(
+                                    get: { viewModel.selectedCandidateID ?? "" },
+                                    set: { viewModel.selectCandidate(id: $0) }
+                                )
+                            ) {
+                                ForEach(viewModel.availableCandidates, id: \.id) { candidate in
+                                    Text(candidateMenuLabel(for: candidate))
+                                        .tag(candidate.id)
+                                }
+                            }
+                            .pickerStyle(.menu)
                         }
-                        .buttonStyle(.borderedProminent)
-
-                        Button("Re-check Hardware") {
-                            viewModel.refreshRecommendation()
-                        }
-                        .buttonStyle(.bordered)
+                        .frame(maxWidth: .infinity, alignment: .leading)
                     }
+                }
+
+                if let selectedCandidate = viewModel.selectedCandidate {
+                    GroupBox(viewModel.isUsingRecommendedCandidate ? "Selected Model (Recommended)" : "Selected Model (Override)") {
+                        VStack(alignment: .leading, spacing: 8) {
+                            Text(selectedCandidate.displayName)
+                                .font(.headline)
+                            Text("Tier: \(selectedCandidate.tier.rawValue)")
+                            Text("Approximate download: \(selectedCandidate.approximateDownloadSizeGB, specifier: "%.1f")GB")
+                            Text("Minimum memory: \(selectedCandidate.minimumMemoryGB)GB")
+                            if !viewModel.isUsingRecommendedCandidate,
+                               let recommended = viewModel.recommendation.candidate {
+                                Text("Override active. Hardware recommendation is \(recommended.displayName).")
+                                    .foregroundStyle(.secondary)
+                            }
+                        }
+                        .frame(maxWidth: .infinity, alignment: .leading)
+                    }
+                }
+
+                HStack(spacing: 10) {
+                    Button("Install") {
+                        viewModel.startInstall()
+                    }
+                    .buttonStyle(.borderedProminent)
+                    .disabled(viewModel.selectedCandidate == nil)
+
+                    Button("Re-check Hardware") {
+                        viewModel.refreshRecommendation()
+                    }
+                    .buttonStyle(.bordered)
                 }
             }
         case .insufficientResources:
             failureStep(message: viewModel.recommendation.rationale)
         }
+    }
+
+    private func candidateMenuLabel(for candidate: ModelCandidate) -> String {
+        if candidate.id == viewModel.recommendedCandidateID {
+            return "\(candidate.displayName) (Recommended)"
+        }
+        return candidate.displayName
     }
 
     private var installingStep: some View {

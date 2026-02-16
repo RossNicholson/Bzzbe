@@ -54,7 +54,9 @@ let package = Package(
             dependencies: [
                 "BzzbeApp",
                 "CoreInference",
-                "CoreStorage"
+                "CoreStorage",
+                "CoreHardware",
+                "CoreInstaller"
             ]
         )
     ]
