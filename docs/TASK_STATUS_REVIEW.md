@@ -22,6 +22,7 @@ Based on `docs/JOB_LIST.md`, the following are complete:
 - ✅ **JOB-012** — Conversation list/history UX (history sidebar with conversation restore/select/delete behavior wired to storage).
 - ✅ **JOB-013** — Runtime integration (local streaming runtime client wired into chat with cancellation/error handling tests).
 - ✅ **JOB-014** — Privacy defaults and consent messaging (Settings now includes local-first disclosure plus telemetry/diagnostics opt-in controls defaulting to disabled).
+- ✅ **JOB-015** — Installer/model action log (installer flow now records action events; Settings displays and exports text logs).
 
 ### What this means practically
 
@@ -38,7 +39,6 @@ Based on `docs/JOB_LIST.md`, the following are complete:
 
 ### P1 tasks still open (alpha quality and polish)
 
-- **JOB-015** — Installer/model action log.
 - **JOB-016** — Alpha performance harness + report.
 
 ### P2 tasks still open
@@ -49,33 +49,31 @@ Based on `docs/JOB_LIST.md`, the following are complete:
 
 Recommended sequence from now:
 
-1. **JOB-015** (installer/model action log)
-2. **JOB-016** (performance/reporting)
-3. **JOB-017** (failure-recovery hardening)
+1. **JOB-016** (performance/reporting)
+2. **JOB-017** (failure-recovery hardening)
 
 ## 4) Short gap analysis
 
 ### Biggest product gaps right now
 
-- Installer action logging is not yet surfaced in-product.
+- Performance benchmark/reporting workflow is not yet captured in-repo.
 
 ### Biggest risk gaps
 
-- Safety/compliance and supportability risk until JOB-015 is done.
 - Performance uncertainty risk until JOB-016 is completed on real Apple Silicon tiers.
 
 ## 5) Suggested immediate sprint (next 7-10 days)
 
-- **Primary track (P1):** JOB-015 installer/model action log.
-- **Parallel track (P1):** JOB-016 performance harness/report setup.
+- **Primary track (P1):** JOB-016 performance harness/report setup.
+- **Parallel track (P2):** JOB-017 failure-recovery hardening.
 - **Exit criteria for sprint:**
-  - Installer action log is visible and exportable.
   - Initial performance harness/report baseline exists for Apple Silicon tiers.
+  - Failure-recovery scenarios are validated and documented.
 
 ## 6) Definition of “on-track” after next sprint
 
 You are on-track if the repository shows:
 
-- JOB-015 landed with installer/model action logging and export support.
 - JOB-016 landed with reproducible performance capture and report output.
+- JOB-017 landed with improved recovery behavior for cancellation/partial setup cases.
 - CI green on all existing + new tests.

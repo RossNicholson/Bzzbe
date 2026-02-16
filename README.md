@@ -54,7 +54,8 @@ Bzzbe is an open-source macOS app (Apple Silicon only) that installs and runs lo
 - ✅ JOB-010 complete: installed model metadata now persists locally after verified setup.
 - ✅ JOB-012 complete: chat now includes conversation history sidebar with restore/select/delete flows plus view model tests.
 - ✅ JOB-014 complete: settings now expose local-first consent messaging with telemetry/diagnostics opt-in controls defaulting to off.
-- 🔜 Next: JOB-015 installer/model action log.
+- ✅ JOB-015 complete: installer/model action events are now recorded, visible in Settings, and exportable as text.
+- 🔜 Next: JOB-016 alpha performance harness and report.
 
 ## Early roadmap summary
 
