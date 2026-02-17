@@ -115,6 +115,7 @@ final class ChatViewModel: ObservableObject {
 
     private let inferenceClient: any InferenceClient
     private let conversationStore: any ConversationStoring
+    private let memoryContextProvider: any MemoryContextProviding
     private let onRequestSetupRerun: () -> Void
     private var streamTask: Task<Void, Never>?
     private var assistantMessageID: UUID?
@@ -124,6 +125,7 @@ final class ChatViewModel: ObservableObject {
     init(
         inferenceClient: any InferenceClient = LocalRuntimeInferenceClient(),
         conversationStore: any ConversationStoring = ChatViewModel.defaultConversationStore(),
+        memoryContextProvider: any MemoryContextProviding = FileMemoryContextProvider(),
         onRequestSetupRerun: @escaping () -> Void = {},
         model: InferenceModelDescriptor = InferenceModelDescriptor(
             identifier: "qwen3:8b",
@@ -133,6 +135,7 @@ final class ChatViewModel: ObservableObject {
     ) {
         self.inferenceClient = inferenceClient
         self.conversationStore = conversationStore
+        self.memoryContextProvider = memoryContextProvider
         self.onRequestSetupRerun = onRequestSetupRerun
         self.model = model
 
@@ -310,12 +313,33 @@ final class ChatViewModel: ObservableObject {
     }
 
     private func inferenceMessages() -> [InferenceMessage] {
-        messages
+        var contextMessages: [InferenceMessage] = []
+        if let memoryMessage = memorySystemMessage() {
+            contextMessages.append(memoryMessage)
+        }
+
+        contextMessages.append(contentsOf: messages
             .filter { !$0.content.isEmpty }
             .map { message in
                 let role: InferenceRole = message.role == .user ? .user : .assistant
                 return InferenceMessage(role: role, content: message.content)
-            }
+            })
+        return contextMessages
+    }
+
+    private func memorySystemMessage() -> InferenceMessage? {
+        let memoryContext = memoryContextProvider.loadContext()
+        guard memoryContext.isEnabled else { return nil }
+
+        let trimmedContent = memoryContext.content.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmedContent.isEmpty else { return nil }
+
+        let clippedContent = String(trimmedContent.prefix(4_000))
+        let content = """
+        Local memory notes for this user (private and editable in Settings). Use only when relevant to the request and do not repeat verbatim unless asked:
+        \(clippedContent)
+        """
+        return InferenceMessage(role: .system, content: content)
     }
 
     private func handle(event: InferenceEvent, requestID: UUID) {

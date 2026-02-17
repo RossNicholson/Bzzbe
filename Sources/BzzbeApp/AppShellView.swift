@@ -129,6 +129,7 @@ private struct SettingsView: View {
     let capabilityProfile: CapabilityProfile
     @StateObject private var privacySettings = PrivacySettingsModel()
     @StateObject private var actionLogModel = InstallerActionLogModel()
+    @StateObject private var memorySettings = UserMemorySettingsModel()
 
     var body: some View {
         ScrollView {
@@ -162,6 +163,52 @@ private struct SettingsView: View {
                     VStack(alignment: .leading, spacing: 6) {
                         Text("Usage telemetry: \(privacySettings.telemetryEnabled ? "Enabled" : "Disabled")")
                         Text("Crash diagnostics: \(privacySettings.diagnosticsEnabled ? "Enabled" : "Disabled")")
+                    }
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                }
+
+                GroupBox("Personal memory") {
+                    VStack(alignment: .leading, spacing: 10) {
+                        Toggle("Use personal memory context in chat", isOn: $memorySettings.isMemoryEnabled)
+                        Text(
+                            "Store user preferences, writing style, project context, or standing instructions. "
+                                + "This file stays local and is injected as system context when enabled."
+                        )
+                        .font(.footnote)
+                        .foregroundStyle(.secondary)
+
+                        Text("File: \(memorySettings.locationPath)")
+                            .font(.caption)
+                            .foregroundStyle(.secondary)
+                            .textSelection(.enabled)
+
+                        TextEditor(text: $memorySettings.content)
+                            .font(.body)
+                            .frame(minHeight: 140)
+
+                        HStack(spacing: 10) {
+                            Button("Save Memory") {
+                                memorySettings.save()
+                            }
+                            .buttonStyle(.borderedProminent)
+
+                            Button("Reload from Disk") {
+                                memorySettings.reload()
+                            }
+                            .buttonStyle(.bordered)
+                        }
+
+                        if let statusMessage = memorySettings.statusMessage {
+                            Text(statusMessage)
+                                .font(.footnote)
+                                .foregroundStyle(.secondary)
+                        }
+
+                        if let errorMessage = memorySettings.errorMessage {
+                            Text(errorMessage)
+                                .font(.footnote)
+                                .foregroundStyle(.red)
+                        }
                     }
                     .frame(maxWidth: .infinity, alignment: .leading)
                 }
