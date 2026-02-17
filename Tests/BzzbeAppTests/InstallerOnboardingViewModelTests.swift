@@ -387,6 +387,65 @@ func installerOnboardingAutomaticRecoveryActionRetriesSetup() async throws {
 }
 
 @MainActor
+@Test("InstallerOnboardingViewModel automatic recovery can recover via runtime restart")
+func installerOnboardingAutomaticRecoveryUsesRestartPath() async throws {
+    let candidate = ModelCandidate(
+        id: "qwen3:8b",
+        displayName: "Qwen 3 8B",
+        approximateDownloadSizeGB: 5.2,
+        minimumMemoryGB: 16,
+        tier: .balanced
+    )
+    let recommendation = InstallRecommendation(
+        status: .ready,
+        tier: candidate.tier.rawValue,
+        candidate: candidate,
+        rationale: "Best fit for detected hardware."
+    )
+    let service = StubInstallerService(
+        recommendation: recommendation,
+        candidates: [candidate]
+    )
+    let bootstrapper = StubRuntimeBootstrapper(
+        isInitiallyReachable: false,
+        startIfInstalledResult: false,
+        restartIfInstalledResult: true,
+        failInstallAttempts: 1
+    )
+    let puller = StubRuntimeModelPuller(
+        events: [
+            .started(modelID: candidate.id),
+            .completed
+        ]
+    )
+    let viewModel = InstallerOnboardingViewModel(
+        profile: CapabilityProfile(architecture: "arm64", memoryGB: 16, freeDiskGB: 80, performanceCores: 8),
+        installerService: service,
+        runtimeModelPuller: puller,
+        runtimeBootstrapper: bootstrapper,
+        runtimeClient: StubInferenceClient(),
+        installedModelStore: InMemoryInstalledModelStore(),
+        actionLogStore: InMemoryInstallerActionLogStore()
+    )
+
+    viewModel.startInstall()
+    try await eventually {
+        if case .failed = viewModel.step {
+            return true
+        }
+        return false
+    }
+
+    viewModel.runAutomaticRecoveryAndRetryInstall()
+    try await eventually {
+        if case .completed = viewModel.step {
+            return true
+        }
+        return false
+    }
+}
+
+@MainActor
 @Test("InstallerOnboardingViewModel retries transient runtime validation failures")
 func installerOnboardingRetriesTransientRuntimeValidationFailures() async throws {
     let candidate = ModelCandidate(
@@ -589,16 +648,19 @@ private actor StubRuntimeModelImporter: RuntimeModelImporting {
 private actor StubRuntimeBootstrapper: RuntimeBootstrapping {
     private var reachable: Bool
     private let startIfInstalledResult: Bool
+    private let restartIfInstalledResult: Bool?
     private let failInstallAttempts: Int
     private var installAttemptCount: Int = 0
 
     init(
         isInitiallyReachable: Bool,
         startIfInstalledResult: Bool,
+        restartIfInstalledResult: Bool? = nil,
         failInstallAttempts: Int = 0
     ) {
         self.reachable = isInitiallyReachable
         self.startIfInstalledResult = startIfInstalledResult
+        self.restartIfInstalledResult = restartIfInstalledResult
         self.failInstallAttempts = failInstallAttempts
     }
 
@@ -611,6 +673,16 @@ private actor StubRuntimeBootstrapper: RuntimeBootstrapping {
             reachable = true
         }
         return startIfInstalledResult
+    }
+
+    func restartRuntimeIfInstalled() async -> Bool {
+        if let restartIfInstalledResult {
+            if restartIfInstalledResult {
+                reachable = true
+            }
+            return restartIfInstalledResult
+        }
+        return await startRuntimeIfInstalled()
     }
 
     func installAndStartRuntime() async throws {

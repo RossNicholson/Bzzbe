@@ -51,7 +51,14 @@ extension RuntimeBootstrapError: LocalizedError {
 protocol RuntimeBootstrapping: Sendable {
     func isRuntimeReachable() async -> Bool
     func startRuntimeIfInstalled() async -> Bool
+    func restartRuntimeIfInstalled() async -> Bool
     func installAndStartRuntime() async throws
+}
+
+extension RuntimeBootstrapping {
+    func restartRuntimeIfInstalled() async -> Bool {
+        await startRuntimeIfInstalled()
+    }
 }
 
 actor OllamaRuntimeBootstrapper: RuntimeBootstrapping {
@@ -98,6 +105,11 @@ actor OllamaRuntimeBootstrapper: RuntimeBootstrapping {
         } catch {
             return false
         }
+    }
+
+    func restartRuntimeIfInstalled() async -> Bool {
+        terminateKnownRuntimeProcesses()
+        return await startRuntimeIfInstalled()
     }
 
     func installAndStartRuntime() async throws {
@@ -250,6 +262,43 @@ actor OllamaRuntimeBootstrapper: RuntimeBootstrapping {
         process.arguments = ["-g", "-j", appURL.path]
         try process.run()
         process.waitUntilExit()
+    }
+
+    private func terminateKnownRuntimeProcesses() {
+        if let runtimeServeProcess, runtimeServeProcess.isRunning {
+            runtimeServeProcess.terminate()
+            runtimeServeProcess.waitUntilExit()
+        }
+        runtimeServeProcess = nil
+
+        runBestEffortProcess(
+            executablePath: "/usr/bin/pkill",
+            arguments: ["-f", "Ollama.app/.*/ollama serve"]
+        )
+        runBestEffortProcess(
+            executablePath: "/usr/bin/pkill",
+            arguments: ["-x", "ollama"]
+        )
+        runBestEffortProcess(
+            executablePath: "/usr/bin/pkill",
+            arguments: ["-x", "Ollama"]
+        )
+
+        Thread.sleep(forTimeInterval: 0.35)
+    }
+
+    private func runBestEffortProcess(executablePath: String, arguments: [String]) {
+        let process = Process()
+        process.executableURL = URL(fileURLWithPath: executablePath)
+        process.arguments = arguments
+        process.standardOutput = Pipe()
+        process.standardError = Pipe()
+        do {
+            try process.run()
+            process.waitUntilExit()
+        } catch {
+            return
+        }
     }
 
     private func runtimeServeExecutableURL(for appURL: URL) -> URL? {

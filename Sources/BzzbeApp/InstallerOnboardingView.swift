@@ -159,7 +159,10 @@ final class InstallerOnboardingViewModel: ObservableObject {
             guard let self else { return }
 
             do {
-                if await self.runtimeBootstrapper.isRuntimeReachable() {
+                if await self.runtimeBootstrapper.restartRuntimeIfInstalled() {
+                    self.runtimeBootstrapStatusMessage = "Runtime restarted. Continuing setup..."
+                    self.logAction(category: "runtime.auto.restarted", message: "Restarted installed runtime during automatic recovery.")
+                } else if await self.runtimeBootstrapper.isRuntimeReachable() {
                     self.runtimeBootstrapStatusMessage = "Runtime is already running."
                 } else if await self.runtimeBootstrapper.startRuntimeIfInstalled() {
                     self.runtimeBootstrapStatusMessage = "Runtime started. Continuing setup..."
@@ -513,6 +516,10 @@ final class InstallerOnboardingViewModel: ObservableObject {
     }
 
     private func recoverRuntimeAfterImportFailure() async -> Bool {
+        if await runtimeBootstrapper.restartRuntimeIfInstalled() {
+            logAction(category: "runtime.auto.restarted", message: "Restarted installed runtime after import failure.")
+            return await runtimeBootstrapper.isRuntimeReachable()
+        }
         if await runtimeBootstrapper.isRuntimeReachable() {
             return true
         }

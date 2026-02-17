@@ -76,7 +76,7 @@ Bzzbe is an open-source macOS app (Apple Silicon only) that installs and runs lo
 ## Troubleshooting
 
 - `Could not connect to the server` (`127.0.0.1:11434`):
-  - Runtime is not reachable. In onboarding, use **Fix Setup Automatically** or **Retry** after runtime is started.
+  - Runtime is not reachable. In onboarding, use **Fix Setup Automatically** (now forces runtime restart) or **Retry** after runtime is started.
 - `The network connection was lost` during setup validation:
   - Setup now retries transient runtime startup drops automatically before surfacing a failure.
 - `The network connection was lost` during model import/upload (`/api/blobs/...`):
