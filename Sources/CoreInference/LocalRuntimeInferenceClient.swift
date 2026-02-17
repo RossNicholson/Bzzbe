@@ -139,6 +139,7 @@ public actor LocalRuntimeInferenceClient: InferenceClient {
 
         let decoder = JSONDecoder()
         var sawDone = false
+        var thoughtFilter = ThoughtTagFilter()
 
         for try await rawLine in bytes.lines {
             let line = rawLine.trimmingCharacters(in: .whitespacesAndNewlines)
@@ -151,10 +152,17 @@ public actor LocalRuntimeInferenceClient: InferenceClient {
 
             let token = payload.message?.content ?? payload.response
             if let token, !token.isEmpty {
-                continuation.yield(.token(token))
+                let visibleToken = thoughtFilter.process(token)
+                if !visibleToken.isEmpty {
+                    continuation.yield(.token(visibleToken))
+                }
             }
 
             if payload.done {
+                let trailingVisibleToken = thoughtFilter.finish()
+                if !trailingVisibleToken.isEmpty {
+                    continuation.yield(.token(trailingVisibleToken))
+                }
                 continuation.yield(.completed)
                 continuation.finish()
                 sawDone = true
@@ -163,6 +171,10 @@ public actor LocalRuntimeInferenceClient: InferenceClient {
         }
 
         if !sawDone {
+            let trailingVisibleToken = thoughtFilter.finish()
+            if !trailingVisibleToken.isEmpty {
+                continuation.yield(.token(trailingVisibleToken))
+            }
             continuation.yield(.completed)
             continuation.finish()
         }
@@ -178,6 +190,80 @@ public actor LocalRuntimeInferenceClient: InferenceClient {
             return String(value.dropFirst())
         }
         return value
+    }
+}
+
+private struct ThoughtTagFilter {
+    private static let openingTag = "<think>"
+    private static let closingTag = "</think>"
+    private static let openingTagLower = openingTag.lowercased()
+    private static let closingTagLower = closingTag.lowercased()
+
+    private var buffer: String = ""
+    private var isInsideThoughtBlock: Bool = false
+
+    mutating func process(_ fragment: String) -> String {
+        guard !fragment.isEmpty else { return "" }
+        buffer += fragment
+
+        var output = ""
+        while true {
+            if isInsideThoughtBlock {
+                if let closingRange = buffer.range(of: Self.closingTag, options: .caseInsensitive) {
+                    buffer.removeSubrange(buffer.startIndex..<closingRange.upperBound)
+                    isInsideThoughtBlock = false
+                    continue
+                }
+
+                buffer = trailingOverlapSuffix(buffer: buffer, tagLower: Self.closingTagLower)
+                break
+            }
+
+            if let openingRange = buffer.range(of: Self.openingTag, options: .caseInsensitive) {
+                output += String(buffer[..<openingRange.lowerBound])
+                buffer.removeSubrange(buffer.startIndex..<openingRange.upperBound)
+                isInsideThoughtBlock = true
+                continue
+            }
+
+            let overlapSuffix = trailingOverlapSuffix(buffer: buffer, tagLower: Self.openingTagLower)
+            let trailingCount = overlapSuffix.count
+            if trailingCount > 0 {
+                output += String(buffer.dropLast(trailingCount))
+            } else {
+                output += buffer
+            }
+            buffer = overlapSuffix
+            break
+        }
+
+        return output
+    }
+
+    mutating func finish() -> String {
+        if isInsideThoughtBlock {
+            buffer = ""
+            return ""
+        }
+        let output = buffer
+        buffer = ""
+        return output
+    }
+
+    private func trailingOverlapSuffix(buffer: String, tagLower: String) -> String {
+        guard !buffer.isEmpty else { return "" }
+        let maxLength = min(buffer.count, tagLower.count - 1)
+        guard maxLength > 0 else { return "" }
+        let lowerBuffer = buffer.lowercased()
+
+        for length in stride(from: maxLength, through: 1, by: -1) {
+            let suffix = String(lowerBuffer.suffix(length))
+            if tagLower.hasPrefix(suffix) {
+                return String(buffer.suffix(length))
+            }
+        }
+
+        return ""
     }
 }
 

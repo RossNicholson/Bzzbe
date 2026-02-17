@@ -115,6 +115,58 @@ struct LocalRuntimeInferenceClientTests {
         #expect((capturedError as? LocalRuntimeInferenceError) == .runtime("model not found"))
     }
 
+    @Test("LocalRuntimeInferenceClient strips think tags from streamed output")
+    func stripsThinkTags() async throws {
+        let session = makeStubbedSession { request in
+            if request.url?.path == "/api/show" {
+                return (
+                    HTTPURLResponse(url: request.url!, statusCode: 200, httpVersion: nil, headerFields: nil)!,
+                    Data("{}".utf8)
+                )
+            }
+
+            if request.url?.path == "/api/chat" {
+                let payload = """
+                {"message":{"content":"<th"},"done":false}
+                {"message":{"content":"ink>internal planning"},"done":false}
+                {"message":{"content":" text</thi"},"done":false}
+                {"message":{"content":"nk>Hello"},"done":false}
+                {"message":{"content":" world"},"done":false}
+                {"done":true}
+                """
+                return (
+                    HTTPURLResponse(url: request.url!, statusCode: 200, httpVersion: nil, headerFields: nil)!,
+                    Data(payload.utf8)
+                )
+            }
+
+            return (
+                HTTPURLResponse(url: request.url!, statusCode: 404, httpVersion: nil, headerFields: nil)!,
+                Data()
+            )
+        }
+
+        let client = LocalRuntimeInferenceClient(
+            configuration: LocalRuntimeConfiguration(baseURL: URL(string: "http://127.0.0.1:11434")!),
+            urlSession: session
+        )
+
+        let model = InferenceModelDescriptor(identifier: "qwen3:8b", displayName: "Qwen 3 8B", contextWindow: 32_768)
+        try await client.loadModel(model)
+
+        let request = InferenceRequest(model: model, messages: [.init(role: .user, content: "hi")])
+        let stream = await client.streamCompletion(request)
+
+        var tokens: [String] = []
+        for try await event in stream {
+            if case let .token(token) = event {
+                tokens.append(token)
+            }
+        }
+
+        #expect(tokens.joined() == "Hello world")
+    }
+
     private func makeStubbedSession(
         handler: @escaping (URLRequest) -> (HTTPURLResponse, Data)
     ) -> URLSession {
