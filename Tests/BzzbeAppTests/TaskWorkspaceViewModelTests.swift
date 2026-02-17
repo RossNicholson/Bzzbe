@@ -97,6 +97,43 @@ func taskWorkspaceBlocksInsufficientToolProfile() async throws {
     #expect(await client.streamCallCount == 0)
 }
 
+@MainActor
+@Test("TaskWorkspaceViewModel enforces layered policy minimums")
+func taskWorkspaceBlocksWhenPolicyMinimumExceedsTaskRequirement() async throws {
+    let client = StubTaskInferenceClient(
+        events: [
+            .started(modelIdentifier: "qwen3:8b"),
+            .token("Should not run"),
+            .completed
+        ]
+    )
+    let model = InferenceModelDescriptor(
+        identifier: "qwen3:8b",
+        displayName: "Qwen 3 8B",
+        contextWindow: 32_768
+    )
+    let pipeline = ToolPermissionPolicyPipeline(
+        minimumProfileByTaskID: ["summarize": .advanced]
+    )
+    let viewModel = TaskWorkspaceViewModel(
+        inferenceClient: client,
+        toolPermissionProvider: StubToolPermissionProfileProvider(profile: .localFiles),
+        toolPermissionPolicyPipeline: pipeline,
+        model: model
+    )
+
+    viewModel.selectedTaskID = "summarize"
+    viewModel.userInput = "Summarize this release note."
+    viewModel.runSelectedTask()
+
+    #expect(viewModel.isRunning == false)
+    #expect(viewModel.runHistory.isEmpty)
+    #expect(viewModel.errorMessage?.contains("Policy minimum") == true)
+    #expect(viewModel.selectedTaskEffectiveRequiredProfile == .advanced)
+    #expect(await client.loadModelCallCount == 0)
+    #expect(await client.streamCallCount == 0)
+}
+
 private struct StubToolPermissionProfileProvider: ToolPermissionProfileProviding {
     let profile: AgentToolAccessLevel
 

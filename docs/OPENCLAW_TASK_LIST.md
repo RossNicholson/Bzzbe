@@ -24,7 +24,7 @@ This tracks the OpenClaw-inspired features Bzzbe should add, in implementation o
    - Add per-conversation current model state and fallback events in logs.
    - Add tests for failover order and cooldown handling.
 
-3. `[ ]` Layered tool policy pipeline
+3. `[x]` Layered tool policy pipeline
    - Move from single profile gate to layered policy evaluation.
    - Support global + per-task + per-session policy merge.
    - Add explain/debug output for “why action was blocked”.

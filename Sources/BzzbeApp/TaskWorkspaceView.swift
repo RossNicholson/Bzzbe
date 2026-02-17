@@ -36,6 +36,7 @@ final class TaskWorkspaceViewModel: ObservableObject {
 
     private let inferenceClient: any InferenceClient
     private let toolPermissionProvider: any ToolPermissionProfileProviding
+    private let toolPermissionPolicyPipeline: ToolPermissionPolicyPipeline
     private var streamTask: Task<Void, Never>?
     private var activeRequestID: UUID?
     private var activeTaskTemplate: AgentTaskTemplate?
@@ -46,6 +47,7 @@ final class TaskWorkspaceViewModel: ObservableObject {
         catalog: AgentCatalog = AgentCatalog(),
         inferenceClient: any InferenceClient = LocalRuntimeInferenceClient(),
         toolPermissionProvider: any ToolPermissionProfileProviding = DefaultsToolPermissionProfileProvider(),
+        toolPermissionPolicyPipeline: ToolPermissionPolicyPipeline = ToolPermissionPolicyPipeline(),
         model: InferenceModelDescriptor
     ) {
         let templates = catalog.templates()
@@ -53,6 +55,7 @@ final class TaskWorkspaceViewModel: ObservableObject {
         self.selectedTaskID = templates.first?.id ?? ""
         self.inferenceClient = inferenceClient
         self.toolPermissionProvider = toolPermissionProvider
+        self.toolPermissionPolicyPipeline = toolPermissionPolicyPipeline
         self.toolPermissionProfile = toolPermissionProvider.currentProfile()
         self.model = model
     }
@@ -63,7 +66,22 @@ final class TaskWorkspaceViewModel: ObservableObject {
 
     var hasPermissionForSelectedTask: Bool {
         guard let selectedTask else { return true }
-        return toolPermissionProfile.satisfies(selectedTask.requiredToolAccess)
+        return permissionEvaluation(for: selectedTask).isAllowed
+    }
+
+    var selectedTaskPolicyExplanation: String? {
+        guard let selectedTask else { return nil }
+        return permissionEvaluation(for: selectedTask).explanation
+    }
+
+    var selectedTaskBlockReason: String? {
+        guard let selectedTask else { return nil }
+        return permissionEvaluation(for: selectedTask).failureReason
+    }
+
+    var selectedTaskEffectiveRequiredProfile: AgentToolAccessLevel? {
+        guard let selectedTask else { return nil }
+        return permissionEvaluation(for: selectedTask).effectiveRequiredProfile
     }
 
     var canRun: Bool {
@@ -81,9 +99,11 @@ final class TaskWorkspaceViewModel: ObservableObject {
             statusText = "No task selected."
             return
         }
-        guard toolPermissionProfile.satisfies(task.requiredToolAccess) else {
-            errorMessage = "Task requires \(task.requiredToolAccess.title) tool profile. Current profile is \(toolPermissionProfile.title)."
-            statusText = "Task blocked by tool permission profile."
+        let permissionEvaluation = permissionEvaluation(for: task)
+        guard permissionEvaluation.isAllowed else {
+            errorMessage = permissionEvaluation.failureReason
+                ?? "Task blocked by tool policy."
+            statusText = "Task blocked by tool policy pipeline."
             return
         }
 
@@ -165,6 +185,13 @@ final class TaskWorkspaceViewModel: ObservableObject {
 
     func refreshToolPermissionProfile() {
         toolPermissionProfile = toolPermissionProvider.currentProfile()
+    }
+
+    private func permissionEvaluation(for task: AgentTaskTemplate) -> ToolPermissionEvaluation {
+        toolPermissionPolicyPipeline.evaluate(
+            task: task,
+            activeProfile: toolPermissionProfile
+        )
     }
 
     private var trimmedInput: String {
@@ -306,11 +333,21 @@ struct TaskWorkspaceView: View {
                     Text("Required tool profile: \(task.requiredToolAccess.title)")
                         .font(.caption)
                         .foregroundStyle(.secondary)
+                    if let effectiveProfile = viewModel.selectedTaskEffectiveRequiredProfile {
+                        Text("Effective required profile: \(effectiveProfile.title)")
+                            .font(.caption)
+                            .foregroundStyle(.secondary)
+                    }
+                    if let selectedTaskPolicyExplanation = viewModel.selectedTaskPolicyExplanation {
+                        Text("Policy: \(selectedTaskPolicyExplanation)")
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                    }
                     Text("Current profile: \(viewModel.toolPermissionProfile.title)")
                         .font(.caption)
                         .foregroundStyle(.secondary)
                     if !viewModel.hasPermissionForSelectedTask {
-                        Text("This task is blocked by the current tool profile. Update profile in Settings.")
+                        Text(viewModel.selectedTaskBlockReason ?? "This task is blocked by tool policy. Update profile in Settings.")
                             .font(.caption)
                             .foregroundStyle(.orange)
                     }
