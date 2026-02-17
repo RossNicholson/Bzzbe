@@ -71,6 +71,7 @@ Bzzbe is an open-source macOS app (Apple Silicon only) that installs and runs lo
 - ✅ Retry UX hardening: setup retries now reuse previously downloaded provider artifact files when present.
 - ✅ Personal memory context: optional local `MEMORY.md` can now be edited in Settings and injected into chat as system context.
 - ✅ Chat slash commands: local quick controls for presets/tuning, new conversation, and context compaction (`/help` for command list).
+- ✅ Chat model failover: runtime/model failures can now trigger automatic fallback to an alternate local model with cooldown-based retry behavior.
 - ✅ Tool permission profiles: `Read-only`/`Local files`/`Advanced` profiles with task-level enforcement.
 
 ## Troubleshooting

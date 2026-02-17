@@ -55,7 +55,11 @@ private struct RouteDetailView: View {
         Group {
             switch route {
             case .chat:
-                ChatView(model: selectedModel, onRequestSetupRerun: onRequestSetupRerun)
+                ChatView(
+                    model: selectedModel,
+                    fallbackModels: fallbackModels,
+                    onRequestSetupRerun: onRequestSetupRerun
+                )
                     .id("chat-\(selectedModel.identifier)")
             case .tasks:
                 TaskWorkspaceView(model: selectedModel)
@@ -94,14 +98,14 @@ private struct RouteDetailView: View {
     }
 
     private var selectedCandidate: ModelCandidate? {
-        if let preferredCandidate = InstallerService.defaultCatalog.first(where: { $0.id == preferredModelID }) {
+        if let preferredCandidate = compatibleCandidates.first(where: { $0.id == preferredModelID }) {
             return preferredCandidate
         }
 
         return InstallerService()
             .recommendedInstall(for: capabilityProfile)
             .candidate
-            ?? InstallerService.defaultCatalog.first
+            ?? compatibleCandidates.first
     }
 
     private func modelDescriptor(from candidate: ModelCandidate) -> InferenceModelDescriptor {
@@ -112,6 +116,26 @@ private struct RouteDetailView: View {
         )
     }
 
+    private var compatibleCandidates: [ModelCandidate] {
+        InstallerService().compatibleCandidates(for: capabilityProfile)
+    }
+
+    private var fallbackModels: [InferenceModelDescriptor] {
+        var descriptors: [InferenceModelDescriptor] = compatibleCandidates.map(modelDescriptor(from:))
+        if descriptors.allSatisfy({ $0.identifier != selectedModel.identifier }) {
+            descriptors.insert(selectedModel, at: 0)
+        }
+
+        var seen: Set<String> = [selectedModel.identifier]
+        return descriptors.filter { descriptor in
+            if seen.contains(descriptor.identifier) {
+                return false
+            }
+            seen.insert(descriptor.identifier)
+            return true
+        }
+    }
+
     private func syncPreferredModelIfNeeded() {
         if !preferredModelID.isEmpty {
             return
@@ -120,7 +144,7 @@ private struct RouteDetailView: View {
             preferredModelID = recommendedID
             return
         }
-        if let firstCandidateID = InstallerService.defaultCatalog.first?.id {
+        if let firstCandidateID = compatibleCandidates.first?.id {
             preferredModelID = firstCandidateID
         }
     }

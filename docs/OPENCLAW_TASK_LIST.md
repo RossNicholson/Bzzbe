@@ -18,7 +18,7 @@ This tracks the OpenClaw-inspired features Bzzbe should add, in implementation o
    - Preserve recent turns and replace older turns with a compact summary block.
    - Add tests for slash behavior and context reduction.
 
-2. `[ ]` Model failover and retry ladder
+2. `[x]` Model failover and retry ladder
    - Add fallback model chain when runtime/model errors are retryable.
    - Add cooldown tracking for recently failed models.
    - Add per-conversation current model state and fallback events in logs.

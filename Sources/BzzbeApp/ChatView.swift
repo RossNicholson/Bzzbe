@@ -102,13 +102,13 @@ final class ChatViewModel: ObservableObject {
     @Published private(set) var recoveryHint: RecoveryHint?
     @Published private(set) var lastPrompt: String?
     @Published private(set) var activeConversationID: String?
+    @Published private(set) var model: InferenceModelDescriptor
     @Published private(set) var selectedPreset: GenerationPreset = .balanced
     @Published private(set) var temperature: Double = 0.7
     @Published private(set) var topP: Double = 0.9
     @Published private(set) var topK: Int = 40
     @Published private(set) var maxOutputTokens: Int = 768
 
-    let model: InferenceModelDescriptor
     let temperatureRange: ClosedRange<Double> = 0.0 ... 2.0
     let topPRange: ClosedRange<Double> = 0.0 ... 1.0
     let topKRange: ClosedRange<Int> = 1 ... 200
@@ -125,16 +125,23 @@ final class ChatViewModel: ObservableObject {
     private let conversationStore: any ConversationStoring
     private let memoryContextProvider: any MemoryContextProviding
     private let onRequestSetupRerun: () -> Void
+    private let primaryModel: InferenceModelDescriptor
+    private let fallbackModels: [InferenceModelDescriptor]
+    private let modelFailoverCooldownSchedule: [TimeInterval] = [60, 300, 900]
     private var streamTask: Task<Void, Never>?
     private var assistantMessageID: UUID?
     private var activeRequestID: UUID?
     private var conversationIDByRequestID: [UUID: String] = [:]
+    private var attemptedModelIDsForCurrentPrompt: Set<String> = []
+    private var modelFailureCounts: [String: Int] = [:]
+    private var modelCooldownUntil: [String: Date] = [:]
 
     init(
         inferenceClient: any InferenceClient = LocalRuntimeInferenceClient(),
         conversationStore: any ConversationStoring = ChatViewModel.defaultConversationStore(),
         memoryContextProvider: any MemoryContextProviding = FileMemoryContextProvider(),
         onRequestSetupRerun: @escaping () -> Void = {},
+        fallbackModels: [InferenceModelDescriptor] = [],
         model: InferenceModelDescriptor = InferenceModelDescriptor(
             identifier: "qwen3:8b",
             displayName: "Qwen 3 8B",
@@ -146,6 +153,11 @@ final class ChatViewModel: ObservableObject {
         self.memoryContextProvider = memoryContextProvider
         self.onRequestSetupRerun = onRequestSetupRerun
         self.model = model
+        primaryModel = model
+        self.fallbackModels = Self.normalizedFallbackModels(
+            fallbackModels,
+            primaryModelID: model.identifier
+        )
 
         Task {
             await restoreLatestConversationIfAvailable()
@@ -200,12 +212,12 @@ final class ChatViewModel: ObservableObject {
         if handleSlashCommand(prompt) {
             return
         }
-        send(prompt: prompt)
+        send(prompt: prompt, appendUserMessage: true, resetFailoverState: true)
     }
 
     func retryLastPrompt() {
         guard let lastPrompt else { return }
-        send(prompt: lastPrompt)
+        send(prompt: lastPrompt, appendUserMessage: true, resetFailoverState: true)
     }
 
     func stopStreaming() {
@@ -280,15 +292,27 @@ final class ChatViewModel: ObservableObject {
         draft.trimmingCharacters(in: .whitespacesAndNewlines)
     }
 
-    private func send(prompt: String) {
+    private func send(prompt: String, appendUserMessage: Bool, resetFailoverState: Bool) {
         guard !isStreaming else { return }
 
+        if appendUserMessage {
+            maybeRestorePrimaryModel()
+        }
+        if resetFailoverState {
+            attemptedModelIDsForCurrentPrompt = []
+        }
+        attemptedModelIDsForCurrentPrompt.insert(model.identifier)
+
         errorMessage = nil
-        commandFeedback = nil
+        if appendUserMessage {
+            commandFeedback = nil
+        }
         recoveryHint = nil
-        lastPrompt = prompt
-        messages.append(.init(role: .user, content: prompt))
-        performAutomaticCompactionIfNeeded()
+        if appendUserMessage {
+            lastPrompt = prompt
+            messages.append(.init(role: .user, content: prompt))
+            performAutomaticCompactionIfNeeded()
+        }
 
         let request = InferenceRequest(
             model: model,
@@ -304,21 +328,26 @@ final class ChatViewModel: ObservableObject {
         let requestID = UUID()
         activeRequestID = requestID
         isStreaming = true
+        if !appendUserMessage, let activeConversationID {
+            conversationIDByRequestID[requestID] = activeConversationID
+        }
 
         streamTask = Task { [weak self] in
             guard let self else { return }
 
             do {
-                await self.persistUserPrompt(prompt, requestID: requestID)
+                if appendUserMessage {
+                    await self.persistUserPrompt(prompt, requestID: requestID)
+                }
 
                 try await self.inferenceClient.loadModel(self.model)
                 let stream = await self.inferenceClient.streamCompletion(request)
                 for try await event in stream {
                     self.handle(event: event, requestID: requestID)
                 }
-                self.finishStreamingIfNeeded(for: requestID)
+                self.finishStreamingIfNeeded(for: requestID, didComplete: true)
             } catch is CancellationError {
-                self.finishStreamingIfNeeded(for: requestID)
+                self.finishStreamingIfNeeded(for: requestID, didComplete: false)
             } catch {
                 self.failStreaming(error: error, requestID: requestID)
             }
@@ -363,9 +392,9 @@ final class ChatViewModel: ObservableObject {
         case let .token(token):
             appendAssistantToken(token, requestID: requestID)
         case .completed:
-            finishStreamingIfNeeded(for: requestID)
+            finishStreamingIfNeeded(for: requestID, didComplete: true)
         case .cancelled:
-            finishStreamingIfNeeded(for: requestID)
+            finishStreamingIfNeeded(for: requestID, didComplete: false)
         }
     }
 
@@ -376,11 +405,14 @@ final class ChatViewModel: ObservableObject {
         messages[index].content += token
     }
 
-    private func finishStreamingIfNeeded(for requestID: UUID) {
+    private func finishStreamingIfNeeded(for requestID: UUID, didComplete: Bool) {
         guard isActiveRequest(requestID) else { return }
 
         let pendingAssistantID = assistantMessageID
         persistAssistantMessageIfNeeded(for: requestID, assistantMessageID: pendingAssistantID)
+        if didComplete {
+            clearModelFailureState(for: model.identifier)
+        }
 
         isStreaming = false
         streamTask = nil
@@ -390,8 +422,14 @@ final class ChatViewModel: ObservableObject {
 
     private func failStreaming(error: Error, requestID: UUID) {
         guard isActiveRequest(requestID) else { return }
+
+        if let lastPrompt,
+           attemptModelFailoverRetry(after: error, requestID: requestID, prompt: lastPrompt) {
+            return
+        }
+
         applyRecoveryState(for: error)
-        finishStreamingIfNeeded(for: requestID)
+        finishStreamingIfNeeded(for: requestID, didComplete: false)
     }
 
     private func isActiveRequest(_ requestID: UUID) -> Bool {
@@ -702,6 +740,108 @@ final class ChatViewModel: ObservableObject {
         return String(normalized.prefix(compactionSummaryPreviewLimit)) + "..."
     }
 
+    private func maybeRestorePrimaryModel() {
+        guard model.identifier != primaryModel.identifier else { return }
+        let now = Date()
+        if let cooldownUntil = modelCooldownUntil[primaryModel.identifier], cooldownUntil > now {
+            return
+        }
+        model = primaryModel
+    }
+
+    private func attemptModelFailoverRetry(after error: Error, requestID: UUID, prompt: String) -> Bool {
+        guard shouldAttemptModelFailover(for: error) else {
+            return false
+        }
+        guard let nextModel = nextAvailableFailoverModel() else {
+            return false
+        }
+
+        let failedModel = model
+        markModelFailure(for: failedModel.identifier)
+        tearDownRequestForFailover(requestID: requestID)
+
+        model = nextModel
+        attemptedModelIDsForCurrentPrompt.insert(nextModel.identifier)
+        commandFeedback = "Model failover: switched to \(nextModel.displayName) and retried."
+        errorMessage = nil
+        recoveryHint = nil
+
+        send(prompt: prompt, appendUserMessage: false, resetFailoverState: false)
+        return true
+    }
+
+    private func shouldAttemptModelFailover(for error: Error) -> Bool {
+        if let runtimeError = error as? LocalRuntimeInferenceError {
+            switch runtimeError {
+            case .unavailable, .invalidResponseStatus, .invalidResponse:
+                return true
+            case let .runtime(details):
+                if isMissingModelError(details) {
+                    return true
+                }
+                let normalized = details.lowercased()
+                return normalized.contains("connection")
+                    || normalized.contains("timeout")
+                    || normalized.contains("timed out")
+                    || normalized.contains("temporar")
+            }
+        }
+
+        if let urlError = error as? URLError {
+            switch urlError.code {
+            case .networkConnectionLost, .cannotConnectToHost, .cannotFindHost, .timedOut:
+                return true
+            default:
+                return false
+            }
+        }
+
+        return false
+    }
+
+    private func nextAvailableFailoverModel() -> InferenceModelDescriptor? {
+        let now = Date()
+
+        for candidate in fallbackModels {
+            guard candidate.identifier != model.identifier else { continue }
+            guard !attemptedModelIDsForCurrentPrompt.contains(candidate.identifier) else { continue }
+            if let cooldownUntil = modelCooldownUntil[candidate.identifier], cooldownUntil > now {
+                continue
+            }
+            return candidate
+        }
+
+        return nil
+    }
+
+    private func markModelFailure(for modelID: String) {
+        let nextFailureCount = (modelFailureCounts[modelID] ?? 0) + 1
+        modelFailureCounts[modelID] = nextFailureCount
+
+        let cooldownIndex = min(nextFailureCount - 1, modelFailoverCooldownSchedule.count - 1)
+        let cooldownDuration = modelFailoverCooldownSchedule[cooldownIndex]
+        modelCooldownUntil[modelID] = Date().addingTimeInterval(cooldownDuration)
+    }
+
+    private func clearModelFailureState(for modelID: String) {
+        modelFailureCounts[modelID] = nil
+        modelCooldownUntil[modelID] = nil
+    }
+
+    private func tearDownRequestForFailover(requestID: UUID) {
+        if let assistantMessageID,
+           let messageIndex = messages.firstIndex(where: { $0.id == assistantMessageID }) {
+            messages.remove(at: messageIndex)
+        }
+
+        conversationIDByRequestID[requestID] = nil
+        isStreaming = false
+        streamTask = nil
+        assistantMessageID = nil
+        activeRequestID = nil
+    }
+
     private func handleSlashCommand(_ input: String) -> Bool {
         let trimmedInput = input.trimmingCharacters(in: .whitespacesAndNewlines)
         guard trimmedInput.hasPrefix("/") else { return false }
@@ -801,6 +941,22 @@ final class ChatViewModel: ObservableObject {
         }
     }
 
+    private static func normalizedFallbackModels(
+        _ models: [InferenceModelDescriptor],
+        primaryModelID: String
+    ) -> [InferenceModelDescriptor] {
+        var deduplicated: [InferenceModelDescriptor] = []
+        var seenIdentifiers: Set<String> = [primaryModelID]
+
+        for model in models {
+            guard !seenIdentifiers.contains(model.identifier) else { continue }
+            seenIdentifiers.insert(model.identifier)
+            deduplicated.append(model)
+        }
+
+        return deduplicated
+    }
+
     private static func defaultConversationStore() -> any ConversationStoring {
         if let sqliteStore = try? SQLiteConversationStore.defaultStore() {
             return sqliteStore
@@ -818,11 +974,13 @@ struct ChatView: View {
             displayName: "Qwen 3 8B",
             contextWindow: 32_768
         ),
+        fallbackModels: [InferenceModelDescriptor] = [],
         onRequestSetupRerun: @escaping () -> Void = {}
     ) {
         _viewModel = StateObject(
             wrappedValue: ChatViewModel(
                 onRequestSetupRerun: onRequestSetupRerun,
+                fallbackModels: fallbackModels,
                 model: model
             )
         )
