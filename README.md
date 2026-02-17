@@ -1,6 +1,6 @@
 # Bzzbe
 
-Bzzbe is an open-source macOS app (Apple Silicon only) that installs and runs local AI models with a polished GUI and agent-like workflows. The goal is to provide a free, privacy-first alternative to paid online assistants by auto-configuring an on-device stack based on each Mac's hardware profile.
+Bzzbe is an open-source macOS app (Apple Silicon only) that installs and runs local AI models with a GUI and task workflows. The goal is a privacy-first local assistant that auto-configures an on-device stack based on each Mac's hardware profile.
 
 ## Product goals
 
@@ -11,22 +11,31 @@ Bzzbe is an open-source macOS app (Apple Silicon only) that installs and runs lo
 - **Open source foundation**: open source models + open source runtime + transparent packaging.
 - **Mac App Store distribution**: downloadable for free with in-app onboarding and local-first defaults.
 
-## Proposed stack (v1)
+## Current stack
 
 - **UI**: SwiftUI + AppKit interop where required.
-- **Inference runtime**: `llama.cpp`-based runtime via local service process.
-- **Model sources**: open models with permissive licenses (e.g., Qwen, Llama variants where license permits).
-- **Persistence**: SQLite + structured files in app support folder.
-- **Task engine**: tool-calling style orchestration for “agent” task templates.
+- **Inference runtime**: local Ollama-compatible service process.
+- **Model sources**: runtime registry pulls and direct provider artifacts (currently Hugging Face entries in catalog).
+- **Persistence**: SQLite for chat history + structured JSON files in Application Support.
+- **Task engine**: reusable local task templates (`CoreAgents`).
 
 ## Core user flow
 
-1. Install from Mac App Store.
-2. On first launch, app verifies Apple Silicon and checks available resources.
-3. App recommends a model profile (Small/Balanced/High Quality).
-4. User clicks **Install**.
-5. Runtime + model package download and setup runs automatically.
-6. User lands in chat + task catalog and can run agent workflows.
+1. User launches app on Apple Silicon Mac.
+2. App profiles hardware and recommends a model profile (Small/Balanced/High Quality).
+3. User can accept recommendation or override model choice.
+4. On install, app ensures runtime is available, downloads model artifact, verifies checksum when configured, and imports into runtime.
+5. On completion, user lands in Chat, Tasks, Models, and Settings routes.
+
+## Local development
+
+- Build:
+  - `swift build`
+- Test:
+  - `swift test`
+- Open in Xcode:
+  - `open Package.swift`
+  - Run the `BzzbeApp` scheme.
 
 ## Repo contents
 
@@ -57,6 +66,20 @@ Bzzbe is an open-source macOS app (Apple Silicon only) that installs and runs lo
 - ✅ JOB-015 complete: installer/model action events are now recorded, visible in Settings, and exportable as text.
 - 🟡 JOB-016 in progress: benchmark harness now emits host metadata + runtime-process RSS with alpha-01 baseline report; real runtime/two-tier capture remains open in defect triage.
 - ✅ JOB-017 complete: chat recovery now surfaces actionable offline/missing-model guidance with one-click retry or setup rerun.
+- ✅ Runtime bootstrap hardening: app now starts runtime headlessly from bundled CLI path before fallback app launch.
+- ✅ Provider import hardening: provider artifacts are uploaded as runtime blobs and then imported via `/api/create` `files` mapping.
+- ✅ Retry UX hardening: setup retries now reuse previously downloaded provider artifact files when present.
+
+## Troubleshooting
+
+- `Could not connect to the server` (`127.0.0.1:11434`):
+  - Runtime is not reachable. In onboarding, use **Fix Setup Automatically** or **Retry** after runtime is started.
+- `Setup failed: Local runtime returned status 400 while importing model.`:
+  - Pull latest `main` and retry. Recent fixes switched provider imports to the Ollama-compatible blob + `files` flow.
+- Long re-download after failed import:
+  - Latest setup flow reuses an already-downloaded provider artifact on retry.
+- `Cannot index window tabs due to missing main bundle identifier` (Xcode console):
+  - Common warning when running as an SPM executable context; not the primary runtime failure signal.
 
 ## Early roadmap summary
 
