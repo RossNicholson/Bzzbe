@@ -377,11 +377,40 @@ final class ChatViewModel: ObservableObject {
         guard !trimmedContent.isEmpty else { return nil }
 
         let clippedContent = String(trimmedContent.prefix(4_000))
+        let query = latestUserPromptForMemoryQuery()
+        let matchingNotes: [MemoryNote]
+        if
+            let searchableProvider = memoryContextProvider as? MemoryNoteSearching,
+            !query.isEmpty
+        {
+            matchingNotes = searchableProvider.searchNotes(
+                query: query,
+                scope: memoryContext.scope,
+                limit: 4
+            )
+        } else {
+            matchingNotes = []
+        }
+
+        let noteSnippetSection: String
+        if matchingNotes.isEmpty {
+            noteSnippetSection = ""
+        } else {
+            let snippetLines = matchingNotes.map { note in
+                "- \(note.title): \(String(note.content.prefix(280)))"
+            }
+            noteSnippetSection = "\nRelevant memory snippets:\n" + snippetLines.joined(separator: "\n")
+        }
+
         let content = """
-        Local memory notes for this user (private and editable in Settings). Use only when relevant to the request and do not repeat verbatim unless asked:
-        \(clippedContent)
+        Local memory notes for this user (\(memoryContext.scope.title) scope, editable in Settings). Use only when relevant to the request and do not repeat verbatim unless asked:
+        \(clippedContent)\(noteSnippetSection)
         """
         return InferenceMessage(role: .system, content: content)
+    }
+
+    private func latestUserPromptForMemoryQuery() -> String {
+        messages.last(where: { $0.role == .user })?.content.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
     }
 
     private func handle(event: InferenceEvent, requestID: UUID) {

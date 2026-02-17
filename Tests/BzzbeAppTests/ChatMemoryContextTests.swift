@@ -37,6 +37,45 @@ func chatViewModelInjectsMemoryContext() async throws {
 }
 
 @MainActor
+@Test("ChatViewModel appends scoped memory search snippets")
+func chatViewModelAppendsScopedMemorySnippets() async throws {
+    let client = MemoryCaptureInferenceClient()
+    let note = MemoryNote(
+        id: UUID(),
+        createdAt: Date(),
+        scope: .private,
+        title: "Release preference",
+        content: "Always include rollout and risk bullets."
+    )
+    let memory = StubMemoryContextProvider(
+        context: MemoryContext(
+            isEnabled: true,
+            content: "Core memory baseline.",
+            scope: .private
+        ),
+        searchResults: [note]
+    )
+
+    let viewModel = ChatViewModel(
+        inferenceClient: client,
+        conversationStore: InMemoryConversationStore(),
+        memoryContextProvider: memory
+    )
+
+    viewModel.draft = "Write release notes"
+    viewModel.sendDraft()
+
+    try await eventually {
+        !viewModel.isStreaming
+    }
+
+    let request = try #require(await client.lastRequest)
+    let systemMessage = try #require(request.messages.first)
+    #expect(systemMessage.content.contains("Relevant memory snippets"))
+    #expect(systemMessage.content.contains("Release preference"))
+}
+
+@MainActor
 @Test("ChatViewModel skips memory context when disabled")
 func chatViewModelSkipsMemoryWhenDisabled() async throws {
     let client = MemoryCaptureInferenceClient()
@@ -64,11 +103,21 @@ func chatViewModelSkipsMemoryWhenDisabled() async throws {
     #expect(!request.messages.contains(where: { $0.role == .system && $0.content.contains("Should not be injected") }))
 }
 
-private struct StubMemoryContextProvider: MemoryContextProviding {
+private struct StubMemoryContextProvider: MemoryContextProviding, MemoryNoteSearching {
     let context: MemoryContext
+    let searchResults: [MemoryNote]
+
+    init(context: MemoryContext, searchResults: [MemoryNote] = []) {
+        self.context = context
+        self.searchResults = searchResults
+    }
 
     func loadContext() -> MemoryContext {
         context
+    }
+
+    func searchNotes(query _: String, scope _: MemoryNoteScope, limit _: Int) -> [MemoryNote] {
+        searchResults
     }
 }
 

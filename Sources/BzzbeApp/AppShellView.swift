@@ -284,13 +284,25 @@ private struct SettingsView: View {
                         Toggle("Use personal memory context in chat", isOn: $memorySettings.isMemoryEnabled)
                         Text(
                             "Store user preferences, writing style, project context, or standing instructions. "
-                                + "This file stays local and is injected as system context when enabled."
+                                + "Memory is layered from `MEMORY.md` plus dated notes, all local to this Mac."
                         )
                         .font(.footnote)
                         .foregroundStyle(.secondary)
 
+                        Picker("Active context scope", selection: $memorySettings.selectedScope) {
+                            ForEach(MemoryNoteScope.allCases, id: \.self) { scope in
+                                Text(scope.title).tag(scope)
+                            }
+                        }
+                        .pickerStyle(.segmented)
+
                         Text("File: \(memorySettings.locationPath)")
                             .font(.caption)
+                            .foregroundStyle(.secondary)
+                            .textSelection(.enabled)
+
+                        Text("Notes file: \(memorySettings.notesLocationPath)")
+                            .font(.caption2)
                             .foregroundStyle(.secondary)
                             .textSelection(.enabled)
 
@@ -320,6 +332,82 @@ private struct SettingsView: View {
                             Text(errorMessage)
                                 .font(.footnote)
                                 .foregroundStyle(.red)
+                        }
+
+                        Divider()
+
+                        Text("Add dated memory note")
+                            .font(.headline)
+
+                        TextField("Note title", text: $memorySettings.noteTitle)
+                            .textFieldStyle(.roundedBorder)
+
+                        Picker("Note scope", selection: $memorySettings.noteScope) {
+                            ForEach(MemoryNoteScope.allCases, id: \.self) { scope in
+                                Text(scope.title).tag(scope)
+                            }
+                        }
+                        .pickerStyle(.segmented)
+
+                        TextEditor(text: $memorySettings.noteContent)
+                            .font(.body)
+                            .frame(minHeight: 100)
+
+                        HStack(spacing: 10) {
+                            Button("Add Note") {
+                                memorySettings.addNote()
+                            }
+                            .buttonStyle(.borderedProminent)
+                        }
+
+                        TextField("Search memory notes", text: $memorySettings.noteSearchQuery)
+                            .textFieldStyle(.roundedBorder)
+
+                        if !memorySettings.searchResults.isEmpty {
+                            VStack(alignment: .leading, spacing: 6) {
+                                Text("Search results")
+                                    .font(.footnote.weight(.semibold))
+                                ForEach(memorySettings.searchResults.prefix(5)) { note in
+                                    Text("\(note.title) · \(note.scope.title)")
+                                        .font(.caption)
+                                        .foregroundStyle(.secondary)
+                                }
+                            }
+                        }
+
+                        if memorySettings.notes.isEmpty {
+                            Text("No dated notes yet.")
+                                .font(.footnote)
+                                .foregroundStyle(.secondary)
+                        } else {
+                            VStack(alignment: .leading, spacing: 8) {
+                                ForEach(Array(memorySettings.notes.prefix(10))) { note in
+                                    VStack(alignment: .leading, spacing: 2) {
+                                        HStack {
+                                            Text(note.title)
+                                                .font(.subheadline.weight(.semibold))
+                                            Spacer()
+                                            Text(note.scope.title)
+                                                .font(.caption2)
+                                                .foregroundStyle(.secondary)
+                                        }
+                                        Text(note.createdAt, format: .dateTime.year().month().day().hour().minute())
+                                            .font(.caption2)
+                                            .foregroundStyle(.secondary)
+                                        Text(note.content)
+                                            .font(.caption)
+                                            .foregroundStyle(.secondary)
+
+                                        Button("Delete Note", role: .destructive) {
+                                            memorySettings.deleteNote(note.id)
+                                        }
+                                        .buttonStyle(.bordered)
+                                    }
+                                    if note.id != memorySettings.notes.prefix(10).last?.id {
+                                        Divider()
+                                    }
+                                }
+                            }
                         }
                     }
                     .frame(maxWidth: .infinity, alignment: .leading)

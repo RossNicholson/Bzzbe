@@ -64,7 +64,7 @@ This tracks the OpenClaw-inspired features Bzzbe should add, in implementation o
    - Return child outputs back into parent conversation safely.
    - Add tests for lifecycle and cancellation.
 
-9. `[ ]` Memory upgrade beyond `MEMORY.md`
+9. `[x]` Memory upgrade beyond `MEMORY.md`
    - Add layered memory (`MEMORY.md` + dated notes).
    - Add local search over memory snippets.
    - Add memory scoping controls (private vs shared contexts).
