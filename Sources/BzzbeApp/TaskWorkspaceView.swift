@@ -50,6 +50,25 @@ final class TaskWorkspaceViewModel: ObservableObject {
         let expiresAt: Date
     }
 
+    enum SubAgentRunStatus: String, Equatable {
+        case queued
+        case running
+        case completed
+        case failed
+        case cancelled
+    }
+
+    struct SubAgentRun: Identifiable, Equatable {
+        let id: UUID
+        let taskID: String
+        let taskName: String
+        let inputPreview: String
+        let createdAt: Date
+        var status: SubAgentRunStatus
+        var output: String
+        var errorMessage: String?
+    }
+
     private struct PendingApprovalContext {
         let task: AgentTaskTemplate
         let input: String
@@ -73,6 +92,7 @@ final class TaskWorkspaceViewModel: ObservableObject {
     @Published private(set) var scheduledJobs: [ScheduledTaskJob] = []
     @Published private(set) var scheduledRunLogs: [ScheduledTaskRunLog] = []
     @Published private(set) var schedulerStatusText: String = "No scheduled jobs yet."
+    @Published private(set) var subAgentRuns: [SubAgentRun] = []
 
     let model: InferenceModelDescriptor
 
@@ -82,6 +102,7 @@ final class TaskWorkspaceViewModel: ObservableObject {
     private let taskApprovalRuleProvider: any TaskApprovalRuleProviding
     private let toolExecutionSandboxPolicy: ToolExecutionSandboxPolicy
     private let scheduledTaskScheduler: ScheduledTaskScheduling
+    private let subAgentInferenceClientFactory: () -> any InferenceClient
     private let nowProvider: () -> Date
     private let approvalTimeout: TimeInterval
     private var streamTask: Task<Void, Never>?
@@ -91,6 +112,7 @@ final class TaskWorkspaceViewModel: ObservableObject {
     private var activeTaskStartedAt: Date = Date()
     private var activeScheduledJobID: UUID?
     private var pendingApprovalContext: PendingApprovalContext?
+    private var subAgentTasks: [UUID: Task<Void, Never>] = [:]
 
     init(
         catalog: AgentCatalog = AgentCatalog(),
@@ -100,6 +122,7 @@ final class TaskWorkspaceViewModel: ObservableObject {
         taskApprovalRuleProvider: any TaskApprovalRuleProviding = DefaultsTaskApprovalRuleProvider(),
         toolExecutionSandboxPolicy: ToolExecutionSandboxPolicy = ToolExecutionSandboxPolicy(),
         scheduledTaskScheduler: ScheduledTaskScheduling = JSONScheduledTaskScheduler(),
+        subAgentInferenceClientFactory: @escaping () -> any InferenceClient = { LocalRuntimeInferenceClient() },
         nowProvider: @escaping () -> Date = Date.init,
         approvalTimeout: TimeInterval = 90,
         model: InferenceModelDescriptor
@@ -113,6 +136,7 @@ final class TaskWorkspaceViewModel: ObservableObject {
         self.taskApprovalRuleProvider = taskApprovalRuleProvider
         self.toolExecutionSandboxPolicy = toolExecutionSandboxPolicy
         self.scheduledTaskScheduler = scheduledTaskScheduler
+        self.subAgentInferenceClientFactory = subAgentInferenceClientFactory
         self.nowProvider = nowProvider
         self.approvalTimeout = approvalTimeout
         self.toolPermissionProfile = toolPermissionProvider.currentProfile()
@@ -380,6 +404,109 @@ final class TaskWorkspaceViewModel: ObservableObject {
         startRun(task: task, input: job.input, scheduledJobID: job.id)
     }
 
+    func startSubAgentForSelectedTask() {
+        guard let task = selectedTask else {
+            schedulerStatusText = "No task selected for sub-agent run."
+            return
+        }
+        let input = trimmedInput
+        guard !input.isEmpty else {
+            schedulerStatusText = "Add input before launching a sub-agent."
+            return
+        }
+
+        let runID = UUID()
+        let run = SubAgentRun(
+            id: runID,
+            taskID: task.id,
+            taskName: task.name,
+            inputPreview: previewText(input, limit: 80),
+            createdAt: nowProvider(),
+            status: .queued,
+            output: "",
+            errorMessage: nil
+        )
+        subAgentRuns.insert(run, at: 0)
+        if subAgentRuns.count > 20 {
+            subAgentRuns = Array(subAgentRuns.prefix(20))
+        }
+
+        let client = subAgentInferenceClientFactory()
+        let request = InferenceRequest(
+            model: model,
+            messages: [
+                InferenceMessage(role: .system, content: task.systemPrompt),
+                InferenceMessage(role: .user, content: input)
+            ]
+        )
+
+        let subAgentTask = Task { [weak self] in
+            guard let self else { return }
+            self.updateSubAgent(runID: runID) { current in
+                current.status = .running
+            }
+
+            do {
+                try await client.loadModel(self.model)
+                var assembledOutput = ""
+                let stream = await client.streamCompletion(request)
+                for try await event in stream {
+                    switch event {
+                    case let .token(token):
+                        assembledOutput += token
+                        self.updateSubAgent(runID: runID) { current in
+                            current.output = assembledOutput
+                        }
+                    case .completed:
+                        self.updateSubAgent(runID: runID) { current in
+                            current.status = .completed
+                            current.output = assembledOutput
+                            current.errorMessage = nil
+                        }
+                    case .cancelled:
+                        self.updateSubAgent(runID: runID) { current in
+                            current.status = .cancelled
+                            current.errorMessage = "Sub-agent run cancelled."
+                        }
+                    case .started:
+                        continue
+                    }
+                }
+            } catch is CancellationError {
+                self.updateSubAgent(runID: runID) { current in
+                    current.status = .cancelled
+                    current.errorMessage = "Sub-agent run cancelled."
+                }
+            } catch {
+                self.updateSubAgent(runID: runID) { current in
+                    current.status = .failed
+                    current.errorMessage = error.localizedDescription
+                }
+            }
+
+            self.subAgentTasks.removeValue(forKey: runID)
+        }
+        subAgentTasks[runID] = subAgentTask
+    }
+
+    func cancelSubAgentRun(_ runID: UUID) {
+        guard let task = subAgentTasks[runID] else { return }
+        task.cancel()
+        subAgentTasks.removeValue(forKey: runID)
+        updateSubAgent(runID: runID) { current in
+            current.status = .cancelled
+            current.errorMessage = "Sub-agent run cancelled."
+        }
+    }
+
+    func useSubAgentOutput(_ runID: UUID) {
+        guard let run = subAgentRuns.first(where: { $0.id == runID }) else { return }
+        let safeOutput = String(run.output.prefix(4_000)).trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !safeOutput.isEmpty else { return }
+        userInput = safeOutput
+        statusText = "Loaded sub-agent output into input."
+    }
+
     func refreshToolPermissionProfile() {
         toolPermissionProfile = toolPermissionProvider.currentProfile()
     }
@@ -387,6 +514,13 @@ final class TaskWorkspaceViewModel: ObservableObject {
     func refreshScheduledState() {
         scheduledJobs = scheduledTaskScheduler.jobs()
         scheduledRunLogs = scheduledTaskScheduler.logs()
+    }
+
+    private func updateSubAgent(runID: UUID, mutation: (inout SubAgentRun) -> Void) {
+        guard let index = subAgentRuns.firstIndex(where: { $0.id == runID }) else { return }
+        var copy = subAgentRuns[index]
+        mutation(&copy)
+        subAgentRuns[index] = copy
     }
 
     private func permissionEvaluation(for task: AgentTaskTemplate) -> ToolPermissionEvaluation {
@@ -543,6 +677,7 @@ struct TaskWorkspaceView: View {
             inputSection
             outputSection
             schedulingSection
+            subAgentSection
             historySection
             Spacer()
         }
@@ -806,6 +941,71 @@ struct TaskWorkspaceView: View {
         }
     }
 
+    private var subAgentSection: some View {
+        GroupBox("Sub-agents") {
+            VStack(alignment: .leading, spacing: 10) {
+                HStack(spacing: 10) {
+                    Button("Run Sub-agent") {
+                        viewModel.startSubAgentForSelectedTask()
+                    }
+                    .buttonStyle(.borderedProminent)
+                    .disabled(viewModel.selectedTask == nil || viewModel.userInput.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
+                }
+
+                if viewModel.subAgentRuns.isEmpty {
+                    Text("No sub-agent runs yet.")
+                        .font(.footnote)
+                        .foregroundStyle(.secondary)
+                } else {
+                    VStack(alignment: .leading, spacing: 8) {
+                        ForEach(Array(viewModel.subAgentRuns.prefix(6))) { run in
+                            VStack(alignment: .leading, spacing: 3) {
+                                HStack {
+                                    Text(run.taskName)
+                                        .font(.subheadline.weight(.semibold))
+                                    Spacer()
+                                    Text(run.status.rawValue.capitalized)
+                                        .font(.caption2)
+                                        .foregroundStyle(subAgentStatusColor(run.status))
+                                }
+                                Text("Input: \(run.inputPreview)")
+                                    .font(.caption)
+                                    .foregroundStyle(.secondary)
+                                if !run.output.isEmpty {
+                                    Text("Output: \(previewSubAgentOutput(run.output))")
+                                        .font(.caption2)
+                                        .foregroundStyle(.secondary)
+                                }
+                                if let errorMessage = run.errorMessage {
+                                    Text(errorMessage)
+                                        .font(.caption2)
+                                        .foregroundStyle(.orange)
+                                }
+                                HStack(spacing: 8) {
+                                    Button("Use Output") {
+                                        viewModel.useSubAgentOutput(run.id)
+                                    }
+                                    .buttonStyle(.bordered)
+                                    .disabled(run.output.isEmpty)
+
+                                    Button("Cancel") {
+                                        viewModel.cancelSubAgentRun(run.id)
+                                    }
+                                    .buttonStyle(.bordered)
+                                    .disabled(run.status != .running && run.status != .queued)
+                                }
+                            }
+
+                            if run.id != viewModel.subAgentRuns.prefix(6).last?.id {
+                                Divider()
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    }
+
     private var historySection: some View {
         GroupBox("Run History") {
             if viewModel.runHistory.isEmpty {
@@ -853,6 +1053,25 @@ struct TaskWorkspaceView: View {
         case .cancelled:
             .orange
         }
+    }
+
+    private func subAgentStatusColor(_ status: TaskWorkspaceViewModel.SubAgentRunStatus) -> Color {
+        switch status {
+        case .completed:
+            .green
+        case .failed:
+            .red
+        case .cancelled:
+            .orange
+        case .queued, .running:
+            .secondary
+        }
+    }
+
+    private func previewSubAgentOutput(_ output: String) -> String {
+        let trimmed = output.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard trimmed.count > 120 else { return trimmed }
+        return String(trimmed.prefix(120)) + "..."
     }
 }
 #endif

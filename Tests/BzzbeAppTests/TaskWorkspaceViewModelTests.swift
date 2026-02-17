@@ -354,6 +354,84 @@ func taskWorkspaceRunsDueScheduledJobs() async throws {
     #expect(await client.streamCallCount == 1)
 }
 
+@MainActor
+@Test("TaskWorkspaceViewModel tracks sub-agent lifecycle and output handoff")
+func taskWorkspaceTracksSubAgentLifecycle() async throws {
+    let mainClient = StubTaskInferenceClient(events: [])
+    let subAgentClient = StubTaskInferenceClient(
+        events: [
+            .started(modelIdentifier: "qwen3:8b"),
+            .token("Child "),
+            .token("output"),
+            .completed
+        ]
+    )
+    let model = InferenceModelDescriptor(
+        identifier: "qwen3:8b",
+        displayName: "Qwen 3 8B",
+        contextWindow: 32_768
+    )
+    let viewModel = TaskWorkspaceViewModel(
+        inferenceClient: mainClient,
+        subAgentInferenceClientFactory: { subAgentClient },
+        model: model
+    )
+
+    viewModel.selectedTaskID = "summarize"
+    viewModel.userInput = "Summarize this weekly update."
+    viewModel.startSubAgentForSelectedTask()
+
+    try await eventually {
+        viewModel.subAgentRuns.first?.status == .completed
+    }
+
+    guard let run = viewModel.subAgentRuns.first else {
+        Issue.record("Expected sub-agent run")
+        return
+    }
+
+    #expect(run.output == "Child output")
+    viewModel.useSubAgentOutput(run.id)
+    #expect(viewModel.userInput == "Child output")
+    #expect(await subAgentClient.streamCallCount == 1)
+    #expect(await mainClient.streamCallCount == 0)
+}
+
+@MainActor
+@Test("TaskWorkspaceViewModel can cancel in-flight sub-agent runs")
+func taskWorkspaceCancelsSubAgentRun() async throws {
+    let model = InferenceModelDescriptor(
+        identifier: "qwen3:8b",
+        displayName: "Qwen 3 8B",
+        contextWindow: 32_768
+    )
+    let hangingSubAgentClient = HangingSubAgentInferenceClient()
+    let viewModel = TaskWorkspaceViewModel(
+        inferenceClient: StubTaskInferenceClient(events: []),
+        subAgentInferenceClientFactory: { hangingSubAgentClient },
+        model: model
+    )
+
+    viewModel.selectedTaskID = "summarize"
+    viewModel.userInput = "Summarize this weekly update."
+    viewModel.startSubAgentForSelectedTask()
+
+    try await eventually {
+        viewModel.subAgentRuns.first?.status == .running
+    }
+    guard let runID = viewModel.subAgentRuns.first?.id else {
+        Issue.record("Expected running sub-agent")
+        return
+    }
+
+    viewModel.cancelSubAgentRun(runID)
+
+    try await eventually {
+        viewModel.subAgentRuns.first?.status == .cancelled
+    }
+    #expect(await hangingSubAgentClient.streamCallCount == 1)
+}
+
 private struct StubToolPermissionProfileProvider: ToolPermissionProfileProviding {
     let profile: AgentToolAccessLevel
 
@@ -449,5 +527,20 @@ private final class InMemoryScheduledTaskStateStore: ScheduledTaskStateStoring {
     func saveState(_ state: ScheduledTaskState) throws {
         self.state = state
     }
+}
+
+private actor HangingSubAgentInferenceClient: InferenceClient {
+    private(set) var streamCallCount: Int = 0
+
+    func loadModel(_: InferenceModelDescriptor) async throws {}
+
+    func streamCompletion(_: InferenceRequest) async -> AsyncThrowingStream<InferenceEvent, Error> {
+        streamCallCount += 1
+        return AsyncThrowingStream { continuation in
+            continuation.yield(.started(modelIdentifier: "qwen3:8b"))
+        }
+    }
+
+    func cancelCurrentRequest() async {}
 }
 #endif

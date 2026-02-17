@@ -58,7 +58,7 @@ This tracks the OpenClaw-inspired features Bzzbe should add, in implementation o
    - Add basic run logs and retry behavior.
    - Add tests for scheduling and persistence.
 
-8. `[ ]` Sub-agent orchestration
+8. `[x]` Sub-agent orchestration
    - Add background child runs with isolated context.
    - Add run registry, status, and cancel controls.
    - Return child outputs back into parent conversation safely.

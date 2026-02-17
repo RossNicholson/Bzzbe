@@ -77,6 +77,7 @@ Bzzbe is an open-source macOS app (Apple Silicon only) that installs and runs lo
 - ✅ Sandbox hardening: risky task runs now pass local sandbox guardrails for path/network/escalation/mount checks, with diagnostics shown when policy config is unsafe.
 - ✅ Skills system: Bzzbe now discovers skills from workspace/user/bundled directories with precedence rules, metadata gating checks, and settings-level enable/disable controls.
 - ✅ Scheduled jobs: one-shot and recurring task jobs now persist locally with run logs, retry behavior, and task-workspace controls to run due jobs.
+- ✅ Sub-agent orchestration: background child task runs now have lifecycle tracking, cancel controls, and safe output handoff back into the main task input.
 
 ## Troubleshooting
 
