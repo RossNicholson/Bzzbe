@@ -95,6 +95,10 @@ actor OllamaRuntimeBootstrapper: RuntimeBootstrapping {
     }
 
     func startRuntimeIfInstalled() async -> Bool {
+        if await isRuntimeReachable() {
+            return true
+        }
+
         guard let appURL = installedRuntimeAppURL() else {
             return false
         }
@@ -347,12 +351,16 @@ actor OllamaRuntimeBootstrapper: RuntimeBootstrapping {
         let clock = ContinuousClock()
         let timeout = Duration.seconds(timeoutSeconds)
         let deadline = clock.now.advanced(by: timeout)
+        var pollIntervalSeconds = max(configuration.reachabilityPollIntervalSeconds, 0.25)
+        let maxPollIntervalSeconds = max(2.0, configuration.reachabilityPollIntervalSeconds * 4)
 
         while clock.now < deadline {
             if await isRuntimeReachable() {
                 return true
             }
-            try? await Task.sleep(for: .milliseconds(Int(configuration.reachabilityPollIntervalSeconds * 1_000)))
+
+            try? await Task.sleep(for: .milliseconds(Int(pollIntervalSeconds * 1_000)))
+            pollIntervalSeconds = min(maxPollIntervalSeconds, pollIntervalSeconds * 1.5)
         }
 
         return await isRuntimeReachable()

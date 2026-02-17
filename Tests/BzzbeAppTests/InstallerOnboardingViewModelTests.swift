@@ -499,6 +499,62 @@ func installerOnboardingRetriesTransientRuntimeValidationFailures() async throws
 }
 
 @MainActor
+@Test("InstallerOnboardingViewModel does not repeatedly start runtime during validation retries")
+func installerOnboardingAvoidsRepeatedRuntimeStartDuringValidationRetries() async throws {
+    let candidate = ModelCandidate(
+        id: "qwen3:8b",
+        displayName: "Qwen 3 8B",
+        approximateDownloadSizeGB: 5.2,
+        minimumMemoryGB: 16,
+        tier: .balanced
+    )
+    let recommendation = InstallRecommendation(
+        status: .ready,
+        tier: candidate.tier.rawValue,
+        candidate: candidate,
+        rationale: "Best fit for detected hardware."
+    )
+    let service = StubInstallerService(
+        recommendation: recommendation,
+        candidates: [candidate]
+    )
+    let puller = StubRuntimeModelPuller(
+        events: [
+            .started(modelID: candidate.id),
+            .completed
+        ]
+    )
+    let runtimeClient = FlakyInferenceClient(
+        transientFailureCount: 2,
+        transientError: LocalRuntimeInferenceError.unavailable("Connection refused")
+    )
+    let bootstrapper = StubRuntimeBootstrapper(
+        isInitiallyReachable: true,
+        startIfInstalledResult: false
+    )
+
+    let viewModel = InstallerOnboardingViewModel(
+        profile: CapabilityProfile(architecture: "arm64", memoryGB: 16, freeDiskGB: 80, performanceCores: 8),
+        installerService: service,
+        runtimeModelPuller: puller,
+        runtimeBootstrapper: bootstrapper,
+        runtimeClient: runtimeClient,
+        installedModelStore: InMemoryInstalledModelStore(),
+        actionLogStore: InMemoryInstallerActionLogStore()
+    )
+
+    viewModel.startInstall()
+    try await eventually {
+        if case .completed = viewModel.step {
+            return true
+        }
+        return false
+    }
+
+    #expect(await bootstrapper.startRuntimeIfInstalledCallCount() == 1)
+}
+
+@MainActor
 @Test("InstallerOnboardingViewModel retries provider import after runtime disconnect")
 func installerOnboardingRetriesProviderImportDisconnect() async throws {
     let providerSource = ProviderArtifactSource(
@@ -734,6 +790,7 @@ private actor StubRuntimeBootstrapper: RuntimeBootstrapping {
     private let restartIfInstalledResult: Bool?
     private let failInstallAttempts: Int
     private var installAttemptCount: Int = 0
+    private var startRuntimeIfInstalledCount: Int = 0
 
     init(
         isInitiallyReachable: Bool,
@@ -752,6 +809,7 @@ private actor StubRuntimeBootstrapper: RuntimeBootstrapping {
     }
 
     func startRuntimeIfInstalled() async -> Bool {
+        startRuntimeIfInstalledCount += 1
         if startIfInstalledResult {
             reachable = true
         }
@@ -774,6 +832,10 @@ private actor StubRuntimeBootstrapper: RuntimeBootstrapping {
             throw RuntimeBootstrapError.runtimeUnavailableAfterStart
         }
         reachable = true
+    }
+
+    func startRuntimeIfInstalledCallCount() async -> Int {
+        startRuntimeIfInstalledCount
     }
 }
 

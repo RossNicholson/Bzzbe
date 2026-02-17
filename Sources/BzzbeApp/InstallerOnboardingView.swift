@@ -630,6 +630,7 @@ final class InstallerOnboardingViewModel: ObservableObject {
         )
 
         let maxAttempts = 3
+        var hasAttemptedRuntimeStartForValidation = false
         for attempt in 1...maxAttempts {
             try Task.checkCancellation()
 
@@ -652,7 +653,10 @@ final class InstallerOnboardingViewModel: ObservableObject {
                     }
 
                     statusText = "Waiting for local runtime to become ready..."
-                    _ = await runtimeBootstrapper.startRuntimeIfInstalled()
+                    if !hasAttemptedRuntimeStartForValidation {
+                        hasAttemptedRuntimeStartForValidation = true
+                        _ = await runtimeBootstrapper.startRuntimeIfInstalled()
+                    }
                     try? await Task.sleep(for: .milliseconds(600 * attempt))
                     continue
                 case let .runtime(details):
