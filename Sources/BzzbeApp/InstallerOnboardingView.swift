@@ -400,10 +400,39 @@ final class InstallerOnboardingViewModel: ObservableObject {
             )
         }
 
-        try await importProviderArtifactWithRetry(
-            candidate: candidate,
-            artifactFileURL: artifactFileURL
-        )
+        do {
+            try await importProviderArtifactWithRetry(
+                candidate: candidate,
+                artifactFileURL: artifactFileURL
+            )
+        } catch {
+            if shouldAttemptRuntimeRegistryFallback(for: error) {
+                statusText = "Import remained unstable. Switching to runtime registry download..."
+                logAction(
+                    category: "provider.import.fallback.started",
+                    message: "Falling back to runtime registry pull for \(candidate.id) after provider import failures."
+                )
+                do {
+                    try await ensureRuntimeReadyForInstall()
+                    try await installViaRuntimeRegistryPull(candidate)
+                    logAction(
+                        category: "provider.import.fallback.completed",
+                        message: "Fallback runtime registry pull completed for \(candidate.id)."
+                    )
+                    return InstalledArtifactMetadata(
+                        artifactPath: "ollama://\(candidate.id)",
+                        checksumSHA256: "runtime-managed"
+                    )
+                } catch {
+                    logAction(
+                        category: "provider.import.fallback.failed",
+                        message: "Fallback runtime registry pull failed for \(candidate.id): \(error.localizedDescription)"
+                    )
+                    throw error
+                }
+            }
+            throw error
+        }
 
         return InstalledArtifactMetadata(
             artifactPath: artifactFileURL.path,
@@ -553,6 +582,18 @@ final class InstallerOnboardingViewModel: ObservableObject {
         }
 
         return false
+    }
+
+    private func shouldAttemptRuntimeRegistryFallback(for error: Error) -> Bool {
+        if let flowError = error as? InstallationFlowError {
+            switch flowError {
+            case .runtimeUnavailable, .importEndedUnexpectedly:
+                return true
+            case .modelMissing, .downloadEndedUnexpectedly:
+                return false
+            }
+        }
+        return isTransientImportFailure(error)
     }
 
     private func ensureRuntimeReadyForInstall() async throws {

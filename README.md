@@ -81,6 +81,7 @@ Bzzbe is an open-source macOS app (Apple Silicon only) that installs and runs lo
   - Setup now retries transient runtime startup drops automatically before surfacing a failure.
 - `The network connection was lost` during model import/upload (`/api/blobs/...`):
   - Setup now retries runtime import automatically and attempts to restart the local runtime before failing.
+  - If provider import remains unstable, setup now falls back to runtime registry pull for the same model ID.
 - `Setup failed: Local runtime returned status 400 while importing model.`:
   - Pull latest `main` and retry. Recent fixes switched provider imports to the Ollama-compatible blob + `files` flow.
 - Long re-download after failed import:
