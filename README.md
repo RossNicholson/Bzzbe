@@ -75,6 +75,7 @@ Bzzbe is an open-source macOS app (Apple Silicon only) that installs and runs lo
 - ✅ Tool permission profiles: `Read-only`/`Local files`/`Advanced` profiles with layered policy evaluation and task-level enforcement.
 - ✅ Risky-action approvals: task runs requiring risky access now require explicit `Allow Once`, `Always Allow`, or `Deny`, with local persistence for always-allow decisions.
 - ✅ Sandbox hardening: risky task runs now pass local sandbox guardrails for path/network/escalation/mount checks, with diagnostics shown when policy config is unsafe.
+- ✅ Skills system: Bzzbe now discovers skills from workspace/user/bundled directories with precedence rules, metadata gating checks, and settings-level enable/disable controls.
 
 ## Troubleshooting
 

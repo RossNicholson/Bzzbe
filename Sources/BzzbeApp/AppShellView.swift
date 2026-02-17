@@ -156,6 +156,7 @@ private struct SettingsView: View {
     @StateObject private var actionLogModel = InstallerActionLogModel()
     @StateObject private var memorySettings = UserMemorySettingsModel()
     @StateObject private var toolPermissionSettings = ToolPermissionSettingsModel()
+    @StateObject private var skillsSettings = SkillsSettingsModel()
 
     var body: some View {
         ScrollView {
@@ -210,6 +211,70 @@ private struct SettingsView: View {
                         Text("Tasks that require higher trust are blocked unless this profile is elevated.")
                             .font(.caption)
                             .foregroundStyle(.secondary)
+                    }
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                }
+
+                GroupBox("Skills") {
+                    VStack(alignment: .leading, spacing: 10) {
+                        HStack(spacing: 10) {
+                            Button("Refresh Skills") {
+                                skillsSettings.refresh()
+                            }
+                            .buttonStyle(.bordered)
+                        }
+
+                        if skillsSettings.skills.isEmpty {
+                            Text("No skills discovered yet. Add skill folders under workspace `.bzzbe/skills`, user `~/.bzzbe/skills`, or bundled resources.")
+                                .font(.footnote)
+                                .foregroundStyle(.secondary)
+                        } else {
+                            VStack(alignment: .leading, spacing: 8) {
+                                ForEach(skillsSettings.skills) { skill in
+                                    VStack(alignment: .leading, spacing: 4) {
+                                        HStack(alignment: .firstTextBaseline) {
+                                            Text(skill.name)
+                                                .font(.subheadline.weight(.semibold))
+                                            Spacer()
+                                            Text(skill.sourceTitle)
+                                                .font(.caption2)
+                                                .foregroundStyle(.secondary)
+                                        }
+
+                                        Text(skill.summary)
+                                            .font(.caption)
+                                            .foregroundStyle(.secondary)
+
+                                        Toggle(
+                                            skill.isEnabled ? "Enabled" : "Disabled",
+                                            isOn: Binding(
+                                                get: { skill.isEnabled },
+                                                set: { isEnabled in
+                                                    skillsSettings.setSkillEnabled(isEnabled, skillID: skill.id)
+                                                }
+                                            )
+                                        )
+                                        .toggleStyle(.switch)
+
+                                        if !skill.isAvailable {
+                                            Text("Unavailable: \(skill.gatingIssues.joined(separator: " | "))")
+                                                .font(.caption2)
+                                                .foregroundStyle(.orange)
+                                        }
+                                    }
+
+                                    if skill.id != skillsSettings.skills.last?.id {
+                                        Divider()
+                                    }
+                                }
+                            }
+                        }
+
+                        if !skillsSettings.directoryDiagnostics.isEmpty {
+                            Text("Diagnostics: \(skillsSettings.directoryDiagnostics.joined(separator: " | "))")
+                                .font(.caption)
+                                .foregroundStyle(.secondary)
+                        }
                     }
                     .frame(maxWidth: .infinity, alignment: .leading)
                 }

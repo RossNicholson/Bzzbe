@@ -44,7 +44,7 @@ This tracks the OpenClaw-inspired features Bzzbe should add, in implementation o
    - Add diagnostics for sandbox configuration issues.
    - Add hardening tests.
 
-6. `[ ]` Skills system
+6. `[x]` Skills system
    - Add skill directories with precedence: workspace > user > bundled.
    - Add metadata-based gating (required binaries/env/config).
    - Add settings UI for enabling/disabling installed skills.
