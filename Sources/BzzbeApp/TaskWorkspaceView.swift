@@ -12,6 +12,20 @@ final class TaskWorkspaceViewModel: ObservableObject {
         case cancelled
     }
 
+    enum ScheduleMode: String, CaseIterable {
+        case oneShot
+        case recurring
+
+        var title: String {
+            switch self {
+            case .oneShot:
+                return "One-shot"
+            case .recurring:
+                return "Recurring"
+            }
+        }
+    }
+
     enum ApprovalDecision {
         case allowOnce
         case alwaysAllow
@@ -53,6 +67,12 @@ final class TaskWorkspaceViewModel: ObservableObject {
     @Published private(set) var pendingApproval: TaskApprovalPrompt?
     @Published private(set) var sandboxStatusText: String = "Sandbox checks idle."
     @Published private(set) var sandboxDiagnostics: [String] = []
+    @Published var scheduleMode: ScheduleMode = .oneShot
+    @Published var scheduledRunAt: Date = Date().addingTimeInterval(300)
+    @Published var recurringIntervalMinutes: Int = 60
+    @Published private(set) var scheduledJobs: [ScheduledTaskJob] = []
+    @Published private(set) var scheduledRunLogs: [ScheduledTaskRunLog] = []
+    @Published private(set) var schedulerStatusText: String = "No scheduled jobs yet."
 
     let model: InferenceModelDescriptor
 
@@ -61,6 +81,7 @@ final class TaskWorkspaceViewModel: ObservableObject {
     private let toolPermissionPolicyPipeline: ToolPermissionPolicyPipeline
     private let taskApprovalRuleProvider: any TaskApprovalRuleProviding
     private let toolExecutionSandboxPolicy: ToolExecutionSandboxPolicy
+    private let scheduledTaskScheduler: ScheduledTaskScheduling
     private let nowProvider: () -> Date
     private let approvalTimeout: TimeInterval
     private var streamTask: Task<Void, Never>?
@@ -68,6 +89,7 @@ final class TaskWorkspaceViewModel: ObservableObject {
     private var activeTaskTemplate: AgentTaskTemplate?
     private var activeTaskInput: String = ""
     private var activeTaskStartedAt: Date = Date()
+    private var activeScheduledJobID: UUID?
     private var pendingApprovalContext: PendingApprovalContext?
 
     init(
@@ -77,6 +99,7 @@ final class TaskWorkspaceViewModel: ObservableObject {
         toolPermissionPolicyPipeline: ToolPermissionPolicyPipeline = ToolPermissionPolicyPipeline(),
         taskApprovalRuleProvider: any TaskApprovalRuleProviding = DefaultsTaskApprovalRuleProvider(),
         toolExecutionSandboxPolicy: ToolExecutionSandboxPolicy = ToolExecutionSandboxPolicy(),
+        scheduledTaskScheduler: ScheduledTaskScheduling = JSONScheduledTaskScheduler(),
         nowProvider: @escaping () -> Date = Date.init,
         approvalTimeout: TimeInterval = 90,
         model: InferenceModelDescriptor
@@ -89,10 +112,12 @@ final class TaskWorkspaceViewModel: ObservableObject {
         self.toolPermissionPolicyPipeline = toolPermissionPolicyPipeline
         self.taskApprovalRuleProvider = taskApprovalRuleProvider
         self.toolExecutionSandboxPolicy = toolExecutionSandboxPolicy
+        self.scheduledTaskScheduler = scheduledTaskScheduler
         self.nowProvider = nowProvider
         self.approvalTimeout = approvalTimeout
         self.toolPermissionProfile = toolPermissionProvider.currentProfile()
         self.model = model
+        refreshScheduledState()
     }
 
     var selectedTask: AgentTaskTemplate? {
@@ -206,7 +231,7 @@ final class TaskWorkspaceViewModel: ObservableObject {
         }
     }
 
-    private func startRun(task: AgentTaskTemplate, input: String) {
+    private func startRun(task: AgentTaskTemplate, input: String, scheduledJobID: UUID? = nil) {
         errorMessage = nil
         output = ""
         statusText = "Starting \(task.name)..."
@@ -225,6 +250,7 @@ final class TaskWorkspaceViewModel: ObservableObject {
         activeTaskTemplate = task
         activeTaskInput = input
         activeTaskStartedAt = Date()
+        activeScheduledJobID = scheduledJobID
 
         streamTask?.cancel()
         streamTask = Task { [weak self] in
@@ -277,8 +303,90 @@ final class TaskWorkspaceViewModel: ObservableObject {
         errorMessage = nil
     }
 
+    func scheduleSelectedTask() {
+        guard let task = selectedTask else {
+            schedulerStatusText = "No task selected for scheduling."
+            return
+        }
+        let input = trimmedInput
+        guard !input.isEmpty else {
+            schedulerStatusText = "Add input before creating a scheduled job."
+            return
+        }
+
+        do {
+            switch scheduleMode {
+            case .oneShot:
+                try scheduledTaskScheduler.scheduleOneShot(
+                    taskID: task.id,
+                    taskName: task.name,
+                    input: input,
+                    runAt: scheduledRunAt
+                )
+                schedulerStatusText = "Scheduled one-shot job for \(task.name)."
+            case .recurring:
+                let interval = max(1, recurringIntervalMinutes)
+                try scheduledTaskScheduler.scheduleRecurring(
+                    taskID: task.id,
+                    taskName: task.name,
+                    input: input,
+                    intervalMinutes: interval,
+                    firstRunAt: scheduledRunAt
+                )
+                schedulerStatusText = "Scheduled recurring job for \(task.name) every \(interval)m."
+            }
+            refreshScheduledState()
+        } catch {
+            schedulerStatusText = "Failed to schedule task: \(error.localizedDescription)"
+        }
+    }
+
+    func removeScheduledJob(_ jobID: UUID) {
+        do {
+            try scheduledTaskScheduler.removeJob(jobID: jobID)
+            schedulerStatusText = "Removed scheduled job."
+            refreshScheduledState()
+        } catch {
+            schedulerStatusText = "Failed to remove job: \(error.localizedDescription)"
+        }
+    }
+
+    func runDueScheduledJobs() {
+        guard !isRunning else { return }
+        let dueJobs = scheduledTaskScheduler.dueJobs(at: nowProvider())
+        guard let job = dueJobs.first else {
+            schedulerStatusText = "No due jobs."
+            refreshScheduledState()
+            return
+        }
+        guard let task = tasks.first(where: { $0.id == job.taskID }) else {
+            do {
+                try scheduledTaskScheduler.recordRunResult(
+                    jobID: job.id,
+                    status: .failed,
+                    message: "Task template no longer exists.",
+                    at: nowProvider()
+                )
+                schedulerStatusText = "Skipped scheduled job: missing task template."
+            } catch {
+                schedulerStatusText = "Failed to update skipped scheduled job: \(error.localizedDescription)"
+            }
+            refreshScheduledState()
+            return
+        }
+
+        statusText = "Running scheduled job: \(task.name)..."
+        schedulerStatusText = "Running scheduled job now."
+        startRun(task: task, input: job.input, scheduledJobID: job.id)
+    }
+
     func refreshToolPermissionProfile() {
         toolPermissionProfile = toolPermissionProvider.currentProfile()
+    }
+
+    func refreshScheduledState() {
+        scheduledJobs = scheduledTaskScheduler.jobs()
+        scheduledRunLogs = scheduledTaskScheduler.logs()
     }
 
     private func permissionEvaluation(for task: AgentTaskTemplate) -> ToolPermissionEvaluation {
@@ -372,6 +480,7 @@ final class TaskWorkspaceViewModel: ObservableObject {
             runHistory = Array(runHistory.prefix(30))
         }
 
+        let completedScheduledJobID = activeScheduledJobID
         self.statusText = statusText
         self.errorMessage = errorMessage
         self.isRunning = false
@@ -379,6 +488,25 @@ final class TaskWorkspaceViewModel: ObservableObject {
         self.activeRequestID = nil
         self.activeTaskTemplate = nil
         self.activeTaskInput = ""
+        self.activeScheduledJobID = nil
+
+        if let completedScheduledJobID {
+            do {
+                let schedulerStatus: ScheduledTaskRunStatus = (status == .completed) ? .completed : .failed
+                try scheduledTaskScheduler.recordRunResult(
+                    jobID: completedScheduledJobID,
+                    status: schedulerStatus,
+                    message: errorMessage,
+                    at: nowProvider()
+                )
+                refreshScheduledState()
+                if status != .cancelled {
+                    runDueScheduledJobs()
+                }
+            } catch {
+                schedulerStatusText = "Failed to update scheduled job result: \(error.localizedDescription)"
+            }
+        }
     }
 
     private func previewText(_ value: String, limit: Int) -> String {
@@ -414,6 +542,7 @@ struct TaskWorkspaceView: View {
             taskSelection
             inputSection
             outputSection
+            schedulingSection
             historySection
             Spacer()
         }
@@ -421,6 +550,7 @@ struct TaskWorkspaceView: View {
         .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
         .onAppear {
             viewModel.refreshToolPermissionProfile()
+            viewModel.refreshScheduledState()
         }
         .onChange(of: viewModel.selectedTaskID) { _, _ in
             viewModel.refreshToolPermissionProfile()
@@ -569,6 +699,110 @@ struct TaskWorkspaceView: View {
                     .textSelection(.enabled)
             }
             .frame(minHeight: 160)
+        }
+    }
+
+    private var schedulingSection: some View {
+        GroupBox("Scheduler") {
+            VStack(alignment: .leading, spacing: 10) {
+                Picker("Schedule Type", selection: $viewModel.scheduleMode) {
+                    ForEach(TaskWorkspaceViewModel.ScheduleMode.allCases, id: \.self) { mode in
+                        Text(mode.title).tag(mode)
+                    }
+                }
+                .pickerStyle(.segmented)
+
+                DatePicker(
+                    "First run",
+                    selection: $viewModel.scheduledRunAt,
+                    displayedComponents: [.date, .hourAndMinute]
+                )
+
+                if viewModel.scheduleMode == .recurring {
+                    Stepper(
+                        "Repeat every \(viewModel.recurringIntervalMinutes) minutes",
+                        value: $viewModel.recurringIntervalMinutes,
+                        in: 1...1_440
+                    )
+                }
+
+                HStack(spacing: 10) {
+                    Button("Schedule Task") {
+                        viewModel.scheduleSelectedTask()
+                    }
+                    .buttonStyle(.borderedProminent)
+                    .disabled(viewModel.selectedTask == nil || viewModel.userInput.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
+
+                    Button("Run Due Jobs") {
+                        viewModel.runDueScheduledJobs()
+                    }
+                    .buttonStyle(.bordered)
+                    .disabled(viewModel.isRunning)
+
+                    Button("Refresh Jobs") {
+                        viewModel.refreshScheduledState()
+                    }
+                    .buttonStyle(.bordered)
+                }
+
+                Text(viewModel.schedulerStatusText)
+                    .font(.footnote)
+                    .foregroundStyle(.secondary)
+
+                if viewModel.scheduledJobs.isEmpty {
+                    Text("No scheduled jobs.")
+                        .font(.footnote)
+                        .foregroundStyle(.secondary)
+                } else {
+                    VStack(alignment: .leading, spacing: 6) {
+                        ForEach(Array(viewModel.scheduledJobs.prefix(6))) { job in
+                            VStack(alignment: .leading, spacing: 2) {
+                                HStack {
+                                    Text(job.taskName)
+                                        .font(.subheadline.weight(.semibold))
+                                    Spacer()
+                                    Text(job.schedule.kind == .oneShot ? "One-shot" : "Recurring")
+                                        .font(.caption2)
+                                        .foregroundStyle(.secondary)
+                                }
+                                Text("Next run: \(job.nextRunAt, format: .dateTime.year().month().day().hour().minute())")
+                                    .font(.caption)
+                                    .foregroundStyle(.secondary)
+                                if job.schedule.kind == .recurring, let interval = job.schedule.intervalMinutes {
+                                    Text("Interval: \(interval)m")
+                                        .font(.caption2)
+                                        .foregroundStyle(.secondary)
+                                }
+                                Text("Retries: \(job.retryCount)/\(job.maxRetryCount)")
+                                    .font(.caption2)
+                                    .foregroundStyle(.secondary)
+                                Button("Remove Job", role: .destructive) {
+                                    viewModel.removeScheduledJob(job.id)
+                                }
+                                .buttonStyle(.bordered)
+                            }
+
+                            if job.id != viewModel.scheduledJobs.prefix(6).last?.id {
+                                Divider()
+                            }
+                        }
+                    }
+                }
+
+                if !viewModel.scheduledRunLogs.isEmpty {
+                    VStack(alignment: .leading, spacing: 4) {
+                        Text("Recent scheduler runs")
+                            .font(.footnote.weight(.semibold))
+                        ForEach(Array(viewModel.scheduledRunLogs.prefix(6))) { log in
+                            Text(
+                                "\(log.taskName) · \(log.status.rawValue) · \(log.timestamp, format: .dateTime.hour().minute().second())"
+                            )
+                            .font(.caption2)
+                            .foregroundStyle(log.status == .completed ? .green : .orange)
+                        }
+                    }
+                }
+            }
         }
     }
 

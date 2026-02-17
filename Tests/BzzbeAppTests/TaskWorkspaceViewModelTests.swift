@@ -310,6 +310,50 @@ func taskWorkspaceBlocksSandboxViolations() async throws {
     #expect(await client.streamCallCount == 0)
 }
 
+@MainActor
+@Test("TaskWorkspaceViewModel runs due scheduled jobs and records scheduler logs")
+func taskWorkspaceRunsDueScheduledJobs() async throws {
+    let client = StubTaskInferenceClient(
+        events: [
+            .started(modelIdentifier: "qwen3:8b"),
+            .token("Scheduled result"),
+            .completed
+        ]
+    )
+    let model = InferenceModelDescriptor(
+        identifier: "qwen3:8b",
+        displayName: "Qwen 3 8B",
+        contextWindow: 32_768
+    )
+    let schedulerStore = InMemoryScheduledTaskStateStore()
+    let scheduler = JSONScheduledTaskScheduler(stateStore: schedulerStore)
+    var now = Date(timeIntervalSince1970: 4_000)
+    let viewModel = TaskWorkspaceViewModel(
+        inferenceClient: client,
+        scheduledTaskScheduler: scheduler,
+        nowProvider: { now },
+        model: model
+    )
+
+    viewModel.selectedTaskID = "summarize"
+    viewModel.userInput = "Summarize this weekly update."
+    viewModel.scheduleMode = .oneShot
+    viewModel.scheduledRunAt = now
+    viewModel.scheduleSelectedTask()
+    #expect(viewModel.scheduledJobs.count == 1)
+
+    viewModel.runDueScheduledJobs()
+    try await eventually {
+        !viewModel.isRunning && viewModel.runHistory.first?.status == .completed
+    }
+
+    now = now.addingTimeInterval(10)
+    viewModel.refreshScheduledState()
+    #expect(viewModel.scheduledJobs.isEmpty)
+    #expect(viewModel.scheduledRunLogs.first?.status == .completed)
+    #expect(await client.streamCallCount == 1)
+}
+
 private struct StubToolPermissionProfileProvider: ToolPermissionProfileProviding {
     let profile: AgentToolAccessLevel
 
@@ -394,4 +438,16 @@ private func eventually(
 }
 
 private struct TaskWorkspacePollingTimeoutError: Error {}
+
+private final class InMemoryScheduledTaskStateStore: ScheduledTaskStateStoring {
+    private var state: ScheduledTaskState = .empty
+
+    func loadState() throws -> ScheduledTaskState {
+        state
+    }
+
+    func saveState(_ state: ScheduledTaskState) throws {
+        self.state = state
+    }
+}
 #endif

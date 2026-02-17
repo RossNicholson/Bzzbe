@@ -52,7 +52,7 @@ This tracks the OpenClaw-inspired features Bzzbe should add, in implementation o
 
 ## Wave 3 (automation + advanced orchestration)
 
-7. `[ ]` Scheduled jobs (cron-style)
+7. `[x]` Scheduled jobs (cron-style)
    - Add persisted scheduler jobs for local tasks.
    - Support one-shot and recurring schedules.
    - Add basic run logs and retry behavior.
