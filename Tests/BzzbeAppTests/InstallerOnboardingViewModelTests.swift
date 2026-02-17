@@ -635,6 +635,89 @@ func installerOnboardingRetriesProviderImportDisconnect() async throws {
 }
 
 @MainActor
+@Test("InstallerOnboardingViewModel can reinstall runtime during repeated import disconnect recovery")
+func installerOnboardingReinstallsRuntimeDuringImportRecovery() async throws {
+    let providerSource = ProviderArtifactSource(
+        providerName: "Test Provider",
+        artifactURL: URL(string: "https://provider.example/qwen.gguf")!
+    )
+    let candidate = ModelCandidate(
+        id: "qwen3:8b",
+        displayName: "Qwen 3 8B",
+        approximateDownloadSizeGB: 5.2,
+        minimumMemoryGB: 16,
+        tier: .balanced,
+        installStrategy: .providerArtifact(providerSource)
+    )
+    let recommendation = InstallRecommendation(
+        status: .ready,
+        tier: candidate.tier.rawValue,
+        candidate: candidate,
+        rationale: "Best fit for detected hardware."
+    )
+    let service = StubInstallerService(
+        recommendation: recommendation,
+        candidates: [candidate]
+    )
+    let profile = CapabilityProfile(architecture: "arm64", memoryGB: 16, freeDiskGB: 80, performanceCores: 8)
+    let runtimeClient = StubInferenceClient()
+    let installedModelStore = InMemoryInstalledModelStore()
+    let actionLogStore = InMemoryInstallerActionLogStore()
+    let downloader = StubArtifactDownloader(
+        events: [
+            .started(resumedBytes: 0, totalBytes: 10),
+            .progress(bytesWritten: 10, totalBytes: 10),
+            .completed(destinationURL: URL(fileURLWithPath: "/tmp/provider.gguf"), totalBytes: 10)
+        ]
+    )
+    let importer = FlakyRuntimeModelImporter(
+        transientFailures: 2,
+        transientError: RuntimeModelImportError.unavailable("The network connection was lost."),
+        successEvents: [
+            .started(modelID: candidate.id),
+            .status("importing"),
+            .completed
+        ]
+    )
+    let verifier = StubArtifactVerifier(checksumValue: "provider-sha256")
+    let providerDirectory = FileManager.default.temporaryDirectory
+        .appendingPathComponent("bzzbe-provider-reinstall-tests", isDirectory: true)
+        .appendingPathComponent(UUID().uuidString, isDirectory: true)
+    let bootstrapper = StubRuntimeBootstrapper(
+        isInitiallyReachable: true,
+        startIfInstalledResult: false,
+        restartIfInstalledResult: false,
+        scriptedReachability: [true, true, false]
+    )
+
+    let viewModel = InstallerOnboardingViewModel(
+        profile: profile,
+        installerService: service,
+        runtimeModelPuller: StubRuntimeModelPuller(events: []),
+        runtimeModelImporter: importer,
+        artifactDownloader: downloader,
+        artifactVerifier: verifier,
+        runtimeBootstrapper: bootstrapper,
+        runtimeClient: runtimeClient,
+        installedModelStore: installedModelStore,
+        actionLogStore: actionLogStore,
+        providerArtifactsDirectoryURL: providerDirectory
+    )
+
+    viewModel.startInstall()
+    try await eventually(timeout: .seconds(6)) {
+        if case .completed = viewModel.step {
+            return true
+        }
+        return false
+    }
+
+    #expect(await importer.importCallCount == 3)
+    #expect(await bootstrapper.installAndStartRuntimeCallCount() == 1)
+    #expect(installedModelStore.savedRecord?.modelID == candidate.id)
+}
+
+@MainActor
 @Test("InstallerOnboardingViewModel falls back to runtime registry pull after repeated provider import disconnects")
 func installerOnboardingFallsBackToRuntimeRegistryPullAfterProviderImportDisconnects() async throws {
     let providerSource = ProviderArtifactSource(
@@ -788,6 +871,7 @@ private actor StubRuntimeBootstrapper: RuntimeBootstrapping {
     private var reachable: Bool
     private let startIfInstalledResult: Bool
     private let restartIfInstalledResult: Bool?
+    private var scriptedReachability: [Bool]
     private let failInstallAttempts: Int
     private var installAttemptCount: Int = 0
     private var startRuntimeIfInstalledCount: Int = 0
@@ -796,16 +880,21 @@ private actor StubRuntimeBootstrapper: RuntimeBootstrapping {
         isInitiallyReachable: Bool,
         startIfInstalledResult: Bool,
         restartIfInstalledResult: Bool? = nil,
+        scriptedReachability: [Bool] = [],
         failInstallAttempts: Int = 0
     ) {
         self.reachable = isInitiallyReachable
         self.startIfInstalledResult = startIfInstalledResult
         self.restartIfInstalledResult = restartIfInstalledResult
+        self.scriptedReachability = scriptedReachability
         self.failInstallAttempts = failInstallAttempts
     }
 
     func isRuntimeReachable() async -> Bool {
-        reachable
+        if !scriptedReachability.isEmpty {
+            return scriptedReachability.removeFirst()
+        }
+        return reachable
     }
 
     func startRuntimeIfInstalled() async -> Bool {
@@ -836,6 +925,10 @@ private actor StubRuntimeBootstrapper: RuntimeBootstrapping {
 
     func startRuntimeIfInstalledCallCount() async -> Int {
         startRuntimeIfInstalledCount
+    }
+
+    func installAndStartRuntimeCallCount() async -> Int {
+        installAttemptCount
     }
 }
 

@@ -496,8 +496,14 @@ final class InstallerOnboardingViewModel: ObservableObject {
                 throw CancellationError()
             } catch {
                 if attempt < maxAttempts, isTransientImportFailure(error) {
-                    statusText = "Runtime disconnected during import. Restarting runtime..."
-                    let runtimeRecovered = await recoverRuntimeAfterImportFailure()
+                    statusText = "Runtime disconnected during import. Recovering runtime..."
+                    logAction(
+                        category: "runtime.import.transient.failure",
+                        message: "Transient runtime import failure for \(candidate.id): \(error.localizedDescription)"
+                    )
+                    let runtimeRecovered = await recoverRuntimeAfterImportFailure(
+                        allowRuntimeReinstall: attempt == (maxAttempts - 1)
+                    )
                     if runtimeRecovered {
                         try? await Task.sleep(for: .milliseconds(700 * attempt))
                         continue
@@ -508,6 +514,10 @@ final class InstallerOnboardingViewModel: ObservableObject {
                 }
 
                 if isTransientImportFailure(error) {
+                    logAction(
+                        category: "runtime.import.transient.exhausted",
+                        message: "Runtime import retries exhausted for \(candidate.id): \(error.localizedDescription)"
+                    )
                     throw InstallationFlowError.runtimeUnavailable(
                         "Local runtime disconnected while importing model. Use 'Fix Setup Automatically' and retry."
                     )
@@ -530,7 +540,9 @@ final class InstallerOnboardingViewModel: ObservableObject {
 
             if attempt < maxAttempts {
                 statusText = "Import stream ended early. Restarting runtime..."
-                let runtimeRecovered = await recoverRuntimeAfterImportFailure()
+                let runtimeRecovered = await recoverRuntimeAfterImportFailure(
+                    allowRuntimeReinstall: attempt == (maxAttempts - 1)
+                )
                 if runtimeRecovered {
                     try? await Task.sleep(for: .milliseconds(700 * attempt))
                     continue
@@ -544,7 +556,7 @@ final class InstallerOnboardingViewModel: ObservableObject {
         throw InstallationFlowError.importEndedUnexpectedly
     }
 
-    private func recoverRuntimeAfterImportFailure() async -> Bool {
+    private func recoverRuntimeAfterImportFailure(allowRuntimeReinstall: Bool = false) async -> Bool {
         if await runtimeBootstrapper.restartRuntimeIfInstalled() {
             logAction(category: "runtime.auto.restarted", message: "Restarted installed runtime after import failure.")
             return await runtimeBootstrapper.isRuntimeReachable()
@@ -556,6 +568,26 @@ final class InstallerOnboardingViewModel: ObservableObject {
             logAction(category: "runtime.auto.started", message: "Restarted installed runtime after import failure.")
             return true
         }
+
+        guard allowRuntimeReinstall else {
+            return false
+        }
+
+        statusText = "Reinstalling local runtime for recovery..."
+        do {
+            try await runtimeBootstrapper.installAndStartRuntime()
+            logAction(
+                category: "runtime.bootstrap.reinstalled",
+                message: "Reinstalled runtime after repeated import disconnects."
+            )
+            return await runtimeBootstrapper.isRuntimeReachable()
+        } catch {
+            logAction(
+                category: "runtime.bootstrap.reinstall.failed",
+                message: "Runtime reinstall during import recovery failed: \(error.localizedDescription)"
+            )
+        }
+
         return false
     }
 
