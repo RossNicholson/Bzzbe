@@ -113,6 +113,13 @@ final class ChatViewModel: ObservableObject {
     let topPRange: ClosedRange<Double> = 0.0 ... 1.0
     let topKRange: ClosedRange<Int> = 1 ... 200
     let maxOutputTokenRange: ClosedRange<Int> = 128 ... 4096
+    private let compactionSummaryHeader = "🧹 Compacted conversation summary"
+    private let estimatedCharactersPerToken = 4
+    private let compactionKeepRecentMessages = 8
+    private let compactionMinimumMessages = 12
+    private let compactionSummarySampleSize = 12
+    private let compactionSummaryPreviewLimit = 180
+    private let autoCompactionThresholdRatio = 0.78
 
     private let inferenceClient: any InferenceClient
     private let conversationStore: any ConversationStoring
@@ -281,6 +288,7 @@ final class ChatViewModel: ObservableObject {
         recoveryHint = nil
         lastPrompt = prompt
         messages.append(.init(role: .user, content: prompt))
+        performAutomaticCompactionIfNeeded()
 
         let request = InferenceRequest(
             model: model,
@@ -597,6 +605,103 @@ final class ChatViewModel: ObservableObject {
         }
     }
 
+    private func performAutomaticCompactionIfNeeded() {
+        guard model.contextWindow > 0 else { return }
+
+        let thresholdTokens = max(512, Int(Double(model.contextWindow) * autoCompactionThresholdRatio))
+        var didCompact = false
+
+        for _ in 0..<3 {
+            let estimatedTokens = estimatedContextTokens()
+            guard estimatedTokens >= thresholdTokens else { break }
+            guard compactCurrentContext(focus: nil) else { break }
+            didCompact = true
+        }
+
+        if didCompact {
+            commandFeedback = "Auto-compacted older context to stay within model limits."
+        }
+    }
+
+    private func estimatedContextTokens() -> Int {
+        let messageTokens = inferenceMessages()
+            .reduce(0) { partial, message in
+                partial + max(1, message.content.count / estimatedCharactersPerToken)
+            }
+        return messageTokens + maxOutputTokens
+    }
+
+    private func compactCurrentContext(focus: String?) -> Bool {
+        let trimmedMessages = messages
+            .map { Message(id: $0.id, role: $0.role, content: $0.content.trimmingCharacters(in: .whitespacesAndNewlines)) }
+            .filter { !$0.content.isEmpty }
+
+        guard trimmedMessages.count >= compactionMinimumMessages else { return false }
+        guard trimmedMessages.count > compactionKeepRecentMessages else { return false }
+
+        let compactCount = trimmedMessages.count - compactionKeepRecentMessages
+        let messagesToCompact = Array(trimmedMessages.prefix(compactCount))
+        let recentMessages = Array(trimmedMessages.suffix(compactionKeepRecentMessages))
+
+        let summary = buildCompactionSummary(from: messagesToCompact, focus: focus)
+        guard !summary.isEmpty else { return false }
+
+        messages = [Message(role: .assistant, content: summary)] + recentMessages
+        return true
+    }
+
+    private func buildCompactionSummary(from messagesToCompact: [Message], focus: String?) -> String {
+        let summarizable = messagesToCompact.filter { !$0.content.hasPrefix(compactionSummaryHeader) }
+        let sampledMessages = sampleMessagesForCompactionSummary(summarizable)
+        let omittedMessagesCount = max(0, summarizable.count - sampledMessages.count)
+        let nestedSummaryCount = max(0, messagesToCompact.count - summarizable.count)
+
+        var lines: [String] = [compactionSummaryHeader]
+        if let focus {
+            let trimmedFocus = focus.trimmingCharacters(in: .whitespacesAndNewlines)
+            if !trimmedFocus.isEmpty {
+                lines.append("Focus: \(trimmedFocus)")
+            }
+        }
+        lines.append("Replaced \(messagesToCompact.count) older messages.")
+
+        if nestedSummaryCount > 0 {
+            lines.append("Merged \(nestedSummaryCount) previous compaction summaries.")
+        }
+
+        if sampledMessages.isEmpty {
+            lines.append("No additional details were retained from compacted messages.")
+            return lines.joined(separator: "\n")
+        }
+
+        lines.append("Snapshot of earlier context:")
+        for message in sampledMessages {
+            let roleLabel = message.role == .user ? "User" : "Assistant"
+            lines.append("- \(roleLabel): \(previewCompactionContent(message.content))")
+        }
+
+        if omittedMessagesCount > 0 {
+            lines.append("- ... \(omittedMessagesCount) more messages omitted.")
+        }
+
+        return lines.joined(separator: "\n")
+    }
+
+    private func sampleMessagesForCompactionSummary(_ messages: [Message]) -> [Message] {
+        guard messages.count > compactionSummarySampleSize else { return messages }
+        let leadingCount = compactionSummarySampleSize / 2
+        let trailingCount = compactionSummarySampleSize - leadingCount
+        return Array(messages.prefix(leadingCount)) + Array(messages.suffix(trailingCount))
+    }
+
+    private func previewCompactionContent(_ value: String) -> String {
+        let normalized = value
+            .replacingOccurrences(of: "\n", with: " ")
+            .trimmingCharacters(in: .whitespacesAndNewlines)
+        guard normalized.count > compactionSummaryPreviewLimit else { return normalized }
+        return String(normalized.prefix(compactionSummaryPreviewLimit)) + "..."
+    }
+
     private func handleSlashCommand(_ input: String) -> Bool {
         let trimmedInput = input.trimmingCharacters(in: .whitespacesAndNewlines)
         guard trimmedInput.hasPrefix("/") else { return false }
@@ -609,10 +714,19 @@ final class ChatViewModel: ObservableObject {
         case "/help":
             errorMessage = nil
             recoveryHint = nil
-            commandFeedback = "Commands: /help, /new, /preset <accurate|balanced|creative>, /temperature <0-2>, /top-p <0-1>, /top-k <int>, /max-tokens <int>"
+            commandFeedback = "Commands: /help, /new, /compact [focus], /preset <accurate|balanced|creative>, /temperature <0-2>, /top-p <0-1>, /top-k <int>, /max-tokens <int>"
         case "/new":
             startNewConversation()
             commandFeedback = "Started a new conversation."
+        case "/compact":
+            errorMessage = nil
+            recoveryHint = nil
+            let focus = args.isEmpty ? nil : args.joined(separator: " ")
+            if compactCurrentContext(focus: focus) {
+                commandFeedback = "Compacted older context for this conversation."
+            } else {
+                commandFeedback = "Not enough conversation history to compact yet."
+            }
         case "/preset":
             guard let presetName = args.first, let preset = parsePreset(name: presetName) else {
                 errorMessage = "Preset command format: /preset <accurate|balanced|creative>"
@@ -920,7 +1034,7 @@ struct ChatView: View {
                     .frame(maxWidth: .infinity, alignment: .leading)
             }
 
-            Text("Slash commands: /help, /new, /preset, /temperature, /top-p, /top-k, /max-tokens")
+            Text("Slash commands: /help, /new, /compact, /preset, /temperature, /top-p, /top-k, /max-tokens")
                 .font(.caption2)
                 .foregroundStyle(.secondary)
                 .frame(maxWidth: .infinity, alignment: .leading)

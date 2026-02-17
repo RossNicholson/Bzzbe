@@ -57,7 +57,44 @@ func slashHelpCommandShowsUsage() {
     viewModel.sendDraft()
 
     #expect(viewModel.commandFeedback?.contains("/preset") == true)
+    #expect(viewModel.commandFeedback?.contains("/compact") == true)
     #expect(viewModel.messages.isEmpty)
+}
+
+@MainActor
+@Test("ChatViewModel slash compact command summarizes older context without inference call")
+func slashCompactCommandCompactsConversationContext() async throws {
+    let store = InMemoryConversationStore()
+    let conversation = try await store.createConversation(title: "Long Chat")
+    for index in 0..<16 {
+        let role: ConversationMessageRole = index.isMultiple(of: 2) ? .user : .assistant
+        _ = try await store.addMessage(
+            conversationID: conversation.id,
+            role: role,
+            content: "Message \(index + 1): \(String(repeating: "detail ", count: 20))"
+        )
+    }
+
+    let client = CommandCaptureInferenceClient()
+    let viewModel = ChatViewModel(
+        inferenceClient: client,
+        conversationStore: store
+    )
+
+    try await eventually {
+        viewModel.activeConversationID == conversation.id && viewModel.messages.count == 16
+    }
+
+    let preCompactCount = viewModel.messages.count
+
+    viewModel.draft = "/compact Focus on decisions"
+    viewModel.sendDraft()
+
+    #expect(viewModel.messages.count < preCompactCount)
+    #expect(viewModel.messages.first?.content.contains("Compacted conversation summary") == true)
+    #expect(viewModel.commandFeedback?.contains("Compacted older context") == true)
+    #expect(await client.loadModelCallCount == 0)
+    #expect(await client.streamCallCount == 0)
 }
 
 @MainActor

@@ -12,7 +12,7 @@ This tracks the OpenClaw-inspired features Bzzbe should add, in implementation o
 
 ## Wave 1 (core chat reliability + control)
 
-1. `[-]` Session context compaction (`/compact` + auto-compaction guard)
+1. `[x]` Session context compaction (`/compact` + auto-compaction guard)
    - Add manual slash command: `/compact [optional focus]`.
    - Add automatic compaction when chat context approaches model window.
    - Preserve recent turns and replace older turns with a compact summary block.
@@ -69,4 +69,3 @@ This tracks the OpenClaw-inspired features Bzzbe should add, in implementation o
    - Add local search over memory snippets.
    - Add memory scoping controls (private vs shared contexts).
    - Add tests for memory indexing/search behavior.
-
