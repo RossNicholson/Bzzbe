@@ -60,6 +60,27 @@ func slashHelpCommandShowsUsage() {
     #expect(viewModel.messages.isEmpty)
 }
 
+@MainActor
+@Test("ChatViewModel treats unknown slash input as normal prompt")
+func slashUnknownFallsBackToPrompt() async throws {
+    let client = CommandCaptureInferenceClient()
+    let viewModel = ChatViewModel(
+        inferenceClient: client,
+        conversationStore: InMemoryConversationStore()
+    )
+
+    viewModel.draft = "/usr/bin/env"
+    viewModel.sendDraft()
+
+    try await eventually {
+        !viewModel.isStreaming
+    }
+
+    #expect(viewModel.messages.first?.content == "/usr/bin/env")
+    #expect(await client.loadModelCallCount == 1)
+    #expect(await client.streamCallCount == 1)
+}
+
 private actor CommandCaptureInferenceClient: InferenceClient {
     private(set) var loadModelCallCount: Int = 0
     private(set) var streamCallCount: Int = 0
@@ -80,4 +101,24 @@ private actor CommandCaptureInferenceClient: InferenceClient {
 
     func cancelCurrentRequest() async {}
 }
+
+@MainActor
+private func eventually(
+    timeout: Duration = .seconds(2),
+    condition: @MainActor @escaping () -> Bool
+) async throws {
+    let clock = ContinuousClock()
+    let deadline = clock.now.advanced(by: timeout)
+
+    while clock.now < deadline {
+        if condition() {
+            return
+        }
+        try await Task.sleep(for: .milliseconds(10))
+    }
+
+    throw PollingTimeoutError()
+}
+
+private struct PollingTimeoutError: Error {}
 #endif

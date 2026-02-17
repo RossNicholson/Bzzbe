@@ -669,9 +669,7 @@ final class ChatViewModel: ObservableObject {
             recoveryHint = nil
             commandFeedback = "Max output tokens set to \(maxOutputTokens)."
         default:
-            errorMessage = "Unknown command. Use /help to list available commands."
-            recoveryHint = nil
-            commandFeedback = nil
+            return false
         }
         return true
     }

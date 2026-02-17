@@ -386,6 +386,59 @@ func installerOnboardingAutomaticRecoveryActionRetriesSetup() async throws {
     }
 }
 
+@MainActor
+@Test("InstallerOnboardingViewModel retries transient runtime validation failures")
+func installerOnboardingRetriesTransientRuntimeValidationFailures() async throws {
+    let candidate = ModelCandidate(
+        id: "qwen3:8b",
+        displayName: "Qwen 3 8B",
+        approximateDownloadSizeGB: 5.2,
+        minimumMemoryGB: 16,
+        tier: .balanced
+    )
+    let recommendation = InstallRecommendation(
+        status: .ready,
+        tier: candidate.tier.rawValue,
+        candidate: candidate,
+        rationale: "Best fit for detected hardware."
+    )
+    let service = StubInstallerService(
+        recommendation: recommendation,
+        candidates: [candidate]
+    )
+    let puller = StubRuntimeModelPuller(
+        events: [
+            .started(modelID: candidate.id),
+            .completed
+        ]
+    )
+    let runtimeClient = FlakyInferenceClient(
+        transientFailureCount: 2,
+        transientError: LocalRuntimeInferenceError.unavailable("The network connection was lost.")
+    )
+
+    let viewModel = InstallerOnboardingViewModel(
+        profile: CapabilityProfile(architecture: "arm64", memoryGB: 16, freeDiskGB: 80, performanceCores: 8),
+        installerService: service,
+        runtimeModelPuller: puller,
+        runtimeBootstrapper: StubRuntimeBootstrapper(
+            isInitiallyReachable: true,
+            startIfInstalledResult: true
+        ),
+        runtimeClient: runtimeClient,
+        installedModelStore: InMemoryInstalledModelStore(),
+        actionLogStore: InMemoryInstallerActionLogStore()
+    )
+
+    viewModel.startInstall()
+    try await eventually {
+        if case .completed = viewModel.step {
+            return true
+        }
+        return false
+    }
+}
+
 private struct StubInstallerService: Installing {
     let recommendation: InstallRecommendation
     let candidates: [ModelCandidate]
@@ -520,6 +573,31 @@ private struct StubArtifactVerifier: ArtifactVerifying {
 
 private actor StubInferenceClient: InferenceClient {
     func loadModel(_ model: InferenceModelDescriptor) async throws {}
+
+    func streamCompletion(_ request: InferenceRequest) async -> AsyncThrowingStream<InferenceEvent, Error> {
+        AsyncThrowingStream { continuation in
+            continuation.finish()
+        }
+    }
+
+    func cancelCurrentRequest() async {}
+}
+
+private actor FlakyInferenceClient: InferenceClient {
+    private var remainingFailures: Int
+    private let transientError: Error
+
+    init(transientFailureCount: Int, transientError: Error) {
+        remainingFailures = transientFailureCount
+        self.transientError = transientError
+    }
+
+    func loadModel(_ model: InferenceModelDescriptor) async throws {
+        if remainingFailures > 0 {
+            remainingFailures -= 1
+            throw transientError
+        }
+    }
 
     func streamCompletion(_ request: InferenceRequest) async -> AsyncThrowingStream<InferenceEvent, Error> {
         AsyncThrowingStream { continuation in

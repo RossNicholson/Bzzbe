@@ -25,9 +25,14 @@ enum UserMemoryConfiguration {
     }
 }
 
-struct FileMemoryContextProvider: MemoryContextProviding {
+final class FileMemoryContextProvider: MemoryContextProviding {
     private let defaults: UserDefaults
     private let memoryFileURL: URL
+    private let fileManager: FileManager
+    private let lock = NSLock()
+    private var cachedContext: MemoryContext?
+    private var cachedModificationDate: Date?
+    private var cachedFileSize: Int64?
 
     init(
         defaults: UserDefaults = .standard,
@@ -35,6 +40,7 @@ struct FileMemoryContextProvider: MemoryContextProviding {
         appSupportDirectoryURL: URL? = nil
     ) {
         self.defaults = defaults
+        self.fileManager = fileManager
         self.memoryFileURL = UserMemoryConfiguration.memoryFileURL(
             fileManager: fileManager,
             appSupportDirectoryURL: appSupportDirectoryURL
@@ -43,8 +49,35 @@ struct FileMemoryContextProvider: MemoryContextProviding {
 
     func loadContext() -> MemoryContext {
         let enabled = defaults.object(forKey: UserMemoryConfiguration.enabledKey) as? Bool ?? false
-        let content = (try? String(contentsOf: memoryFileURL, encoding: .utf8)) ?? ""
-        return MemoryContext(isEnabled: enabled, content: content)
+        guard enabled else {
+            return MemoryContext(isEnabled: false, content: "")
+        }
+
+        let resourceValues = try? memoryFileURL.resourceValues(forKeys: [.contentModificationDateKey, .fileSizeKey])
+        let modificationDate = resourceValues?.contentModificationDate
+        let fileSize = resourceValues?.fileSize.map(Int64.init)
+
+        lock.lock()
+        defer { lock.unlock() }
+
+        if let cachedContext,
+           cachedModificationDate == modificationDate,
+           cachedFileSize == fileSize {
+            return cachedContext
+        }
+
+        let content: String
+        if fileManager.fileExists(atPath: memoryFileURL.path) {
+            content = (try? String(contentsOf: memoryFileURL, encoding: .utf8)) ?? ""
+        } else {
+            content = ""
+        }
+
+        let context = MemoryContext(isEnabled: true, content: content)
+        cachedContext = context
+        cachedModificationDate = modificationDate
+        cachedFileSize = fileSize
+        return context
     }
 }
 

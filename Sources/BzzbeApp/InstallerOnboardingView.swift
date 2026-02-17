@@ -479,27 +479,53 @@ final class InstallerOnboardingViewModel: ObservableObject {
             contextWindow: 32_768
         )
 
-        do {
-            try await runtimeClient.loadModel(model)
-        } catch let error as LocalRuntimeInferenceError {
-            switch error {
-            case .unavailable:
-                throw InstallationFlowError.runtimeUnavailable(
-                    "Local runtime is not reachable yet. Use 'Fix Setup Automatically' and retry."
-                )
-            case let .runtime(details):
-                if isMissingModelError(details) {
-                    throw InstallationFlowError.modelMissing(
-                        "Local runtime did not report model '\(candidate.id)' as installed after setup. Retry setup."
+        let maxAttempts = 3
+        for attempt in 1...maxAttempts {
+            try Task.checkCancellation()
+
+            do {
+                try await runtimeClient.loadModel(model)
+                if attempt > 1 {
+                    logAction(
+                        category: "runtime.validation.recovered",
+                        message: "Runtime model availability recovered for \(candidate.id) on attempt \(attempt)."
                     )
                 }
-                throw InstallationFlowError.runtimeUnavailable(error.localizedDescription)
-            case .invalidResponseStatus, .invalidResponse:
-                throw InstallationFlowError.runtimeUnavailable(error.localizedDescription)
+                return
+            } catch let error as LocalRuntimeInferenceError {
+                switch error {
+                case .unavailable, .invalidResponseStatus, .invalidResponse:
+                    if attempt == maxAttempts {
+                        throw InstallationFlowError.runtimeUnavailable(
+                            "Local runtime is not reachable yet. Use 'Fix Setup Automatically' and retry."
+                        )
+                    }
+
+                    statusText = "Waiting for local runtime to become ready..."
+                    _ = await runtimeBootstrapper.startRuntimeIfInstalled()
+                    try? await Task.sleep(for: .milliseconds(600 * attempt))
+                    continue
+                case let .runtime(details):
+                    if isMissingModelError(details) {
+                        throw InstallationFlowError.modelMissing(
+                            "Local runtime did not report model '\(candidate.id)' as installed after setup. Retry setup."
+                        )
+                    }
+
+                    if attempt == maxAttempts {
+                        throw InstallationFlowError.runtimeUnavailable(error.localizedDescription)
+                    }
+
+                    statusText = "Validating runtime status..."
+                    try? await Task.sleep(for: .milliseconds(500 * attempt))
+                    continue
+                }
             }
-        } catch {
-            throw InstallationFlowError.runtimeUnavailable(error.localizedDescription)
         }
+
+        throw InstallationFlowError.runtimeUnavailable(
+            "Local runtime is not reachable yet. Use 'Fix Setup Automatically' and retry."
+        )
     }
 
     private func isMissingModelError(_ details: String) -> Bool {
