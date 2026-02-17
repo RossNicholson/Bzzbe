@@ -98,6 +98,7 @@ final class ChatViewModel: ObservableObject {
     @Published private(set) var messages: [Message] = []
     @Published private(set) var isStreaming: Bool = false
     @Published private(set) var errorMessage: String?
+    @Published private(set) var commandFeedback: String?
     @Published private(set) var recoveryHint: RecoveryHint?
     @Published private(set) var lastPrompt: String?
     @Published private(set) var activeConversationID: String?
@@ -189,6 +190,9 @@ final class ChatViewModel: ObservableObject {
         let prompt = trimmedDraft
         guard !prompt.isEmpty else { return }
         draft = ""
+        if handleSlashCommand(prompt) {
+            return
+        }
         send(prompt: prompt)
     }
 
@@ -273,6 +277,7 @@ final class ChatViewModel: ObservableObject {
         guard !isStreaming else { return }
 
         errorMessage = nil
+        commandFeedback = nil
         recoveryHint = nil
         lastPrompt = prompt
         messages.append(.init(role: .user, content: prompt))
@@ -508,6 +513,7 @@ final class ChatViewModel: ObservableObject {
     }
 
     private func applyRecoveryState(for error: Error) {
+        commandFeedback = nil
         if let runtimeError = error as? LocalRuntimeInferenceError {
             switch runtimeError {
             case .unavailable:
@@ -588,6 +594,98 @@ final class ChatViewModel: ObservableObject {
             selectedPreset = matchingPreset
         } else {
             selectedPreset = .custom
+        }
+    }
+
+    private func handleSlashCommand(_ input: String) -> Bool {
+        let trimmedInput = input.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard trimmedInput.hasPrefix("/") else { return false }
+
+        let components = trimmedInput.split(whereSeparator: \.isWhitespace).map(String.init)
+        guard let commandToken = components.first?.lowercased() else { return true }
+        let args = Array(components.dropFirst())
+
+        switch commandToken {
+        case "/help":
+            errorMessage = nil
+            recoveryHint = nil
+            commandFeedback = "Commands: /help, /new, /preset <accurate|balanced|creative>, /temperature <0-2>, /top-p <0-1>, /top-k <int>, /max-tokens <int>"
+        case "/new":
+            startNewConversation()
+            commandFeedback = "Started a new conversation."
+        case "/preset":
+            guard let presetName = args.first, let preset = parsePreset(name: presetName) else {
+                errorMessage = "Preset command format: /preset <accurate|balanced|creative>"
+                recoveryHint = nil
+                commandFeedback = nil
+                return true
+            }
+            applyPreset(preset)
+            errorMessage = nil
+            recoveryHint = nil
+            commandFeedback = "Applied preset: \(preset.title)."
+        case "/temperature":
+            guard let rawValue = args.first, let value = Double(rawValue) else {
+                errorMessage = "Temperature command format: /temperature <0-2>"
+                recoveryHint = nil
+                commandFeedback = nil
+                return true
+            }
+            setTemperature(value)
+            errorMessage = nil
+            recoveryHint = nil
+            commandFeedback = "Temperature set to \(String(format: "%.2f", temperature))."
+        case "/top-p":
+            guard let rawValue = args.first, let value = Double(rawValue) else {
+                errorMessage = "Top-p command format: /top-p <0-1>"
+                recoveryHint = nil
+                commandFeedback = nil
+                return true
+            }
+            setTopP(value)
+            errorMessage = nil
+            recoveryHint = nil
+            commandFeedback = "Top-p set to \(String(format: "%.2f", topP))."
+        case "/top-k":
+            guard let rawValue = args.first, let value = Int(rawValue) else {
+                errorMessage = "Top-k command format: /top-k <integer>"
+                recoveryHint = nil
+                commandFeedback = nil
+                return true
+            }
+            setTopK(value)
+            errorMessage = nil
+            recoveryHint = nil
+            commandFeedback = "Top-k set to \(topK)."
+        case "/max-tokens":
+            guard let rawValue = args.first, let value = Int(rawValue) else {
+                errorMessage = "Max-tokens command format: /max-tokens <integer>"
+                recoveryHint = nil
+                commandFeedback = nil
+                return true
+            }
+            setMaxOutputTokens(value)
+            errorMessage = nil
+            recoveryHint = nil
+            commandFeedback = "Max output tokens set to \(maxOutputTokens)."
+        default:
+            errorMessage = "Unknown command. Use /help to list available commands."
+            recoveryHint = nil
+            commandFeedback = nil
+        }
+        return true
+    }
+
+    private func parsePreset(name: String) -> GenerationPreset? {
+        switch name.lowercased() {
+        case "accurate":
+            return .accurate
+        case "balanced":
+            return .balanced
+        case "creative":
+            return .creative
+        default:
+            return nil
         }
     }
 
@@ -816,6 +914,18 @@ struct ChatView: View {
                 .disabled(viewModel.isStreaming)
 
             generationControls
+
+            if let commandFeedback = viewModel.commandFeedback {
+                Text(commandFeedback)
+                    .font(.footnote)
+                    .foregroundStyle(.secondary)
+                    .frame(maxWidth: .infinity, alignment: .leading)
+            }
+
+            Text("Slash commands: /help, /new, /preset, /temperature, /top-p, /top-k, /max-tokens")
+                .font(.caption2)
+                .foregroundStyle(.secondary)
+                .frame(maxWidth: .infinity, alignment: .leading)
 
             HStack(spacing: 8) {
                 Button("Send") {

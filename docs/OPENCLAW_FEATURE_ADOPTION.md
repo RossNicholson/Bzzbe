@@ -24,6 +24,10 @@ MIT licensing permits code reuse with attribution and license preservation in co
 - Personal memory notebook (`MEMORY.md`) in local app data.
 - Settings UI to enable/disable memory context and edit/save/reload it.
 - Chat injection of memory as a bounded system-context block when enabled.
+- Slash commands in chat for fast local control:
+  - `/help`, `/new`
+  - `/preset <accurate|balanced|creative>`
+  - `/temperature`, `/top-p`, `/top-k`, `/max-tokens`
 
 ### Good next candidates
 

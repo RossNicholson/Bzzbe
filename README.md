@@ -70,6 +70,7 @@ Bzzbe is an open-source macOS app (Apple Silicon only) that installs and runs lo
 - ✅ Provider import hardening: provider artifacts are uploaded as runtime blobs and then imported via `/api/create` `files` mapping.
 - ✅ Retry UX hardening: setup retries now reuse previously downloaded provider artifact files when present.
 - ✅ Personal memory context: optional local `MEMORY.md` can now be edited in Settings and injected into chat as system context.
+- ✅ Chat slash commands: local quick controls for presets/tuning and new conversation (`/help` for command list).
 
 ## Troubleshooting
 
