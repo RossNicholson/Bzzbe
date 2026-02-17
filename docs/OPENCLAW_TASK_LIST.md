@@ -38,7 +38,7 @@ This tracks the OpenClaw-inspired features Bzzbe should add, in implementation o
    - Persist per-user allowlist rules locally.
    - Add tests for approval and timeout behavior.
 
-5. `[ ]` Sandbox hardening for local tool execution
+5. `[x]` Sandbox hardening for local tool execution
    - Add strict path/network guardrails before tool execution.
    - Block unsafe mounts, host networking, and disallowed escalation.
    - Add diagnostics for sandbox configuration issues.

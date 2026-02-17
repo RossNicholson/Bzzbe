@@ -265,6 +265,51 @@ func taskWorkspaceApprovalTimesOut() async throws {
     #expect(await client.streamCallCount == 0)
 }
 
+@MainActor
+@Test("TaskWorkspaceViewModel blocks risky tasks that violate sandbox policy")
+func taskWorkspaceBlocksSandboxViolations() async throws {
+    let client = StubTaskInferenceClient(
+        events: [
+            .started(modelIdentifier: "qwen3:8b"),
+            .token("Should not run"),
+            .completed
+        ]
+    )
+    let model = InferenceModelDescriptor(
+        identifier: "qwen3:8b",
+        displayName: "Qwen 3 8B",
+        contextWindow: 32_768
+    )
+    let approvals = StubTaskApprovalRuleProvider(alwaysAllowedTaskIDs: ["organize_files_plan"])
+    let sandboxPolicy = ToolExecutionSandboxPolicy(
+        configuration: ToolExecutionSandboxConfiguration(
+            allowedPathPrefixes: ["/Users/test-safe-root"],
+            allowedNetworkHosts: [],
+            allowHostNetwork: false,
+            allowPrivilegeEscalation: false,
+            blockedMountPrefixes: ["/"]
+        )
+    )
+    let viewModel = TaskWorkspaceViewModel(
+        inferenceClient: client,
+        toolPermissionProvider: StubToolPermissionProfileProvider(profile: .localFiles),
+        taskApprovalRuleProvider: approvals,
+        toolExecutionSandboxPolicy: sandboxPolicy,
+        model: model
+    )
+
+    viewModel.selectedTaskID = "organize_files_plan"
+    viewModel.userInput = "Organize files in /etc and /var/tmp."
+    viewModel.runSelectedTask()
+
+    #expect(viewModel.isRunning == false)
+    #expect(viewModel.runHistory.isEmpty)
+    #expect(viewModel.errorMessage?.contains("Sandbox blocked request") == true)
+    #expect(viewModel.statusText.contains("sandbox policy") == true)
+    #expect(await client.loadModelCallCount == 0)
+    #expect(await client.streamCallCount == 0)
+}
+
 private struct StubToolPermissionProfileProvider: ToolPermissionProfileProviding {
     let profile: AgentToolAccessLevel
 

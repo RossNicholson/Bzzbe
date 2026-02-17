@@ -51,6 +51,8 @@ final class TaskWorkspaceViewModel: ObservableObject {
     @Published private(set) var runHistory: [TaskRun] = []
     @Published private(set) var toolPermissionProfile: AgentToolAccessLevel
     @Published private(set) var pendingApproval: TaskApprovalPrompt?
+    @Published private(set) var sandboxStatusText: String = "Sandbox checks idle."
+    @Published private(set) var sandboxDiagnostics: [String] = []
 
     let model: InferenceModelDescriptor
 
@@ -58,6 +60,7 @@ final class TaskWorkspaceViewModel: ObservableObject {
     private let toolPermissionProvider: any ToolPermissionProfileProviding
     private let toolPermissionPolicyPipeline: ToolPermissionPolicyPipeline
     private let taskApprovalRuleProvider: any TaskApprovalRuleProviding
+    private let toolExecutionSandboxPolicy: ToolExecutionSandboxPolicy
     private let nowProvider: () -> Date
     private let approvalTimeout: TimeInterval
     private var streamTask: Task<Void, Never>?
@@ -73,6 +76,7 @@ final class TaskWorkspaceViewModel: ObservableObject {
         toolPermissionProvider: any ToolPermissionProfileProviding = DefaultsToolPermissionProfileProvider(),
         toolPermissionPolicyPipeline: ToolPermissionPolicyPipeline = ToolPermissionPolicyPipeline(),
         taskApprovalRuleProvider: any TaskApprovalRuleProviding = DefaultsTaskApprovalRuleProvider(),
+        toolExecutionSandboxPolicy: ToolExecutionSandboxPolicy = ToolExecutionSandboxPolicy(),
         nowProvider: @escaping () -> Date = Date.init,
         approvalTimeout: TimeInterval = 90,
         model: InferenceModelDescriptor
@@ -84,6 +88,7 @@ final class TaskWorkspaceViewModel: ObservableObject {
         self.toolPermissionProvider = toolPermissionProvider
         self.toolPermissionPolicyPipeline = toolPermissionPolicyPipeline
         self.taskApprovalRuleProvider = taskApprovalRuleProvider
+        self.toolExecutionSandboxPolicy = toolExecutionSandboxPolicy
         self.nowProvider = nowProvider
         self.approvalTimeout = approvalTimeout
         self.toolPermissionProfile = toolPermissionProvider.currentProfile()
@@ -148,6 +153,19 @@ final class TaskWorkspaceViewModel: ObservableObject {
         }
 
         let effectiveRequiredProfile = permissionEvaluation.effectiveRequiredProfile
+        let sandboxRequest = ToolExecutionSandboxRequest.fromPromptInput(input)
+        let sandboxEvaluation = toolExecutionSandboxPolicy.evaluate(
+            request: sandboxRequest,
+            requiredProfile: effectiveRequiredProfile
+        )
+        sandboxStatusText = sandboxEvaluation.summary
+        sandboxDiagnostics = sandboxEvaluation.configurationDiagnostics
+        guard sandboxEvaluation.isAllowed else {
+            errorMessage = sandboxEvaluation.summary
+            statusText = "Task blocked by sandbox policy."
+            return
+        }
+
         if requiresApproval(for: effectiveRequiredProfile), !taskApprovalRuleProvider.isAlwaysAllowed(taskID: task.id) {
             if
                 let existingPrompt = pendingApproval,
@@ -456,6 +474,14 @@ struct TaskWorkspaceView: View {
                         .foregroundStyle(.secondary)
                     if !viewModel.hasPermissionForSelectedTask {
                         Text(viewModel.selectedTaskBlockReason ?? "This task is blocked by tool policy. Update profile in Settings.")
+                            .font(.caption)
+                            .foregroundStyle(.orange)
+                    }
+                    Text("Sandbox: \(viewModel.sandboxStatusText)")
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                    if !viewModel.sandboxDiagnostics.isEmpty {
+                        Text("Sandbox diagnostics: \(viewModel.sandboxDiagnostics.joined(separator: " | "))")
                             .font(.caption)
                             .foregroundStyle(.orange)
                     }
