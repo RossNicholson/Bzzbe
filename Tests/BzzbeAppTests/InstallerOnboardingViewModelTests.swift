@@ -439,6 +439,86 @@ func installerOnboardingRetriesTransientRuntimeValidationFailures() async throws
     }
 }
 
+@MainActor
+@Test("InstallerOnboardingViewModel retries provider import after runtime disconnect")
+func installerOnboardingRetriesProviderImportDisconnect() async throws {
+    let providerSource = ProviderArtifactSource(
+        providerName: "Test Provider",
+        artifactURL: URL(string: "https://provider.example/qwen.gguf")!
+    )
+    let candidate = ModelCandidate(
+        id: "qwen3:8b",
+        displayName: "Qwen 3 8B",
+        approximateDownloadSizeGB: 5.2,
+        minimumMemoryGB: 16,
+        tier: .balanced,
+        installStrategy: .providerArtifact(providerSource)
+    )
+    let recommendation = InstallRecommendation(
+        status: .ready,
+        tier: candidate.tier.rawValue,
+        candidate: candidate,
+        rationale: "Best fit for detected hardware."
+    )
+    let service = StubInstallerService(
+        recommendation: recommendation,
+        candidates: [candidate]
+    )
+    let profile = CapabilityProfile(architecture: "arm64", memoryGB: 16, freeDiskGB: 80, performanceCores: 8)
+    let runtimeClient = StubInferenceClient()
+    let installedModelStore = InMemoryInstalledModelStore()
+    let actionLogStore = InMemoryInstallerActionLogStore()
+    let downloader = StubArtifactDownloader(
+        events: [
+            .started(resumedBytes: 0, totalBytes: 10),
+            .progress(bytesWritten: 10, totalBytes: 10),
+            .completed(destinationURL: URL(fileURLWithPath: "/tmp/provider.gguf"), totalBytes: 10)
+        ]
+    )
+    let importer = FlakyRuntimeModelImporter(
+        transientFailures: 1,
+        transientError: RuntimeModelImportError.unavailable("The network connection was lost."),
+        successEvents: [
+            .started(modelID: candidate.id),
+            .status("importing"),
+            .completed
+        ]
+    )
+    let verifier = StubArtifactVerifier(checksumValue: "provider-sha256")
+    let providerDirectory = FileManager.default.temporaryDirectory
+        .appendingPathComponent("bzzbe-provider-retry-tests", isDirectory: true)
+        .appendingPathComponent(UUID().uuidString, isDirectory: true)
+    let bootstrapper = StubRuntimeBootstrapper(
+        isInitiallyReachable: true,
+        startIfInstalledResult: true
+    )
+
+    let viewModel = InstallerOnboardingViewModel(
+        profile: profile,
+        installerService: service,
+        runtimeModelPuller: StubRuntimeModelPuller(events: []),
+        runtimeModelImporter: importer,
+        artifactDownloader: downloader,
+        artifactVerifier: verifier,
+        runtimeBootstrapper: bootstrapper,
+        runtimeClient: runtimeClient,
+        installedModelStore: installedModelStore,
+        actionLogStore: actionLogStore,
+        providerArtifactsDirectoryURL: providerDirectory
+    )
+
+    viewModel.startInstall()
+    try await eventually {
+        if case .completed = viewModel.step {
+            return true
+        }
+        return false
+    }
+
+    #expect(await importer.importCallCount == 2)
+    #expect(installedModelStore.savedRecord?.modelID == candidate.id)
+}
+
 private struct StubInstallerService: Installing {
     let recommendation: InstallRecommendation
     let candidates: [ModelCandidate]
@@ -606,6 +686,45 @@ private actor FlakyInferenceClient: InferenceClient {
     }
 
     func cancelCurrentRequest() async {}
+}
+
+private actor FlakyRuntimeModelImporter: RuntimeModelImporting {
+    private var transientFailures: Int
+    private let transientError: Error
+    private let successEvents: [RuntimeModelImportEvent]
+    private(set) var importCallCount: Int = 0
+
+    init(
+        transientFailures: Int,
+        transientError: Error,
+        successEvents: [RuntimeModelImportEvent]
+    ) {
+        self.transientFailures = transientFailures
+        self.transientError = transientError
+        self.successEvents = successEvents
+    }
+
+    func importModel(modelID: String, artifactFileURL: URL) async -> AsyncThrowingStream<RuntimeModelImportEvent, Error> {
+        importCallCount += 1
+        let shouldFail = transientFailures > 0
+        if transientFailures > 0 {
+            transientFailures -= 1
+        }
+
+        return AsyncThrowingStream { continuation in
+            if shouldFail {
+                continuation.finish(throwing: transientError)
+                return
+            }
+
+            for event in successEvents {
+                continuation.yield(event)
+            }
+            continuation.finish()
+        }
+    }
+
+    func cancelCurrentImport() async {}
 }
 
 private final class InMemoryInstalledModelStore: InstalledModelStoring {

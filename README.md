@@ -79,6 +79,8 @@ Bzzbe is an open-source macOS app (Apple Silicon only) that installs and runs lo
   - Runtime is not reachable. In onboarding, use **Fix Setup Automatically** or **Retry** after runtime is started.
 - `The network connection was lost` during setup validation:
   - Setup now retries transient runtime startup drops automatically before surfacing a failure.
+- `The network connection was lost` during model import/upload (`/api/blobs/...`):
+  - Setup now retries runtime import automatically and attempts to restart the local runtime before failing.
 - `Setup failed: Local runtime returned status 400 while importing model.`:
   - Pull latest `main` and retry. Recent fixes switched provider imports to the Ollama-compatible blob + `files` flow.
 - Long re-download after failed import:

@@ -397,38 +397,9 @@ final class InstallerOnboardingViewModel: ObservableObject {
             )
         }
 
-        statusText = "Registering downloaded model in local runtime..."
-        let importStream = await runtimeModelImporter.importModel(
-            modelID: candidate.id,
+        try await importProviderArtifactWithRetry(
+            candidate: candidate,
             artifactFileURL: artifactFileURL
-        )
-        var importCompleted = false
-        for try await event in importStream {
-            try Task.checkCancellation()
-            switch event {
-            case .started:
-                statusText = "Importing downloaded model..."
-                logAction(
-                    category: "runtime.import.started",
-                    message: "Started runtime import for \(candidate.id)."
-                )
-            case let .status(message):
-                statusText = message
-            case .completed:
-                importCompleted = true
-            }
-        }
-
-        if !importCompleted {
-            if Task.isCancelled {
-                throw CancellationError()
-            }
-            throw InstallationFlowError.importEndedUnexpectedly
-        }
-
-        logAction(
-            category: "runtime.import.completed",
-            message: "Runtime import completed for \(candidate.id)."
         )
 
         return InstalledArtifactMetadata(
@@ -444,6 +415,137 @@ final class InstallerOnboardingViewModel: ObservableObject {
         }
         guard values.isRegularFile == true else { return false }
         return (values.fileSize ?? 0) > 0
+    }
+
+    private func importProviderArtifactWithRetry(
+        candidate: ModelCandidate,
+        artifactFileURL: URL
+    ) async throws {
+        let maxAttempts = 3
+
+        for attempt in 1...maxAttempts {
+            try Task.checkCancellation()
+
+            if attempt == 1 {
+                statusText = "Registering downloaded model in local runtime..."
+            } else {
+                statusText = "Retrying model import (\(attempt)/\(maxAttempts))..."
+                logAction(
+                    category: "runtime.import.retry",
+                    message: "Retrying runtime import for \(candidate.id) (attempt \(attempt) of \(maxAttempts))."
+                )
+            }
+
+            let importStream = await runtimeModelImporter.importModel(
+                modelID: candidate.id,
+                artifactFileURL: artifactFileURL
+            )
+            var importCompleted = false
+
+            do {
+                for try await event in importStream {
+                    try Task.checkCancellation()
+                    switch event {
+                    case .started:
+                        statusText = "Importing downloaded model..."
+                        if attempt == 1 {
+                            logAction(
+                                category: "runtime.import.started",
+                                message: "Started runtime import for \(candidate.id)."
+                            )
+                        }
+                    case let .status(message):
+                        statusText = message
+                    case .completed:
+                        importCompleted = true
+                    }
+                }
+            } catch is CancellationError {
+                throw CancellationError()
+            } catch {
+                if attempt < maxAttempts, isTransientImportFailure(error) {
+                    statusText = "Runtime disconnected during import. Restarting runtime..."
+                    let runtimeRecovered = await recoverRuntimeAfterImportFailure()
+                    if runtimeRecovered {
+                        try? await Task.sleep(for: .milliseconds(700 * attempt))
+                        continue
+                    }
+                    throw InstallationFlowError.runtimeUnavailable(
+                        "Local runtime disconnected while importing model. Use 'Fix Setup Automatically' and retry."
+                    )
+                }
+
+                if isTransientImportFailure(error) {
+                    throw InstallationFlowError.runtimeUnavailable(
+                        "Local runtime disconnected while importing model. Use 'Fix Setup Automatically' and retry."
+                    )
+                }
+
+                throw error
+            }
+
+            if importCompleted {
+                logAction(
+                    category: "runtime.import.completed",
+                    message: "Runtime import completed for \(candidate.id)."
+                )
+                return
+            }
+
+            if Task.isCancelled {
+                throw CancellationError()
+            }
+
+            if attempt < maxAttempts {
+                statusText = "Import stream ended early. Restarting runtime..."
+                let runtimeRecovered = await recoverRuntimeAfterImportFailure()
+                if runtimeRecovered {
+                    try? await Task.sleep(for: .milliseconds(700 * attempt))
+                    continue
+                }
+                throw InstallationFlowError.runtimeUnavailable(
+                    "Local runtime disconnected while importing model. Use 'Fix Setup Automatically' and retry."
+                )
+            }
+        }
+
+        throw InstallationFlowError.importEndedUnexpectedly
+    }
+
+    private func recoverRuntimeAfterImportFailure() async -> Bool {
+        if await runtimeBootstrapper.isRuntimeReachable() {
+            return true
+        }
+        if await runtimeBootstrapper.startRuntimeIfInstalled() {
+            logAction(category: "runtime.auto.started", message: "Restarted installed runtime after import failure.")
+            return true
+        }
+        return false
+    }
+
+    private func isTransientImportFailure(_ error: Error) -> Bool {
+        if let importError = error as? RuntimeModelImportError {
+            switch importError {
+            case .unavailable, .invalidResponseStatus, .invalidResponse:
+                return true
+            case let .runtime(details):
+                let normalized = details.lowercased()
+                return normalized.contains("connection")
+                    || normalized.contains("broken pipe")
+                    || normalized.contains("reset")
+            }
+        }
+
+        if let urlError = error as? URLError {
+            switch urlError.code {
+            case .networkConnectionLost, .cannotConnectToHost, .cannotFindHost, .timedOut:
+                return true
+            default:
+                return false
+            }
+        }
+
+        return false
     }
 
     private func ensureRuntimeReadyForInstall() async throws {
