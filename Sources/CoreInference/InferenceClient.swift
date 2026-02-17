@@ -33,17 +33,23 @@ public struct InferenceRequest: Sendable, Equatable {
     public let messages: [InferenceMessage]
     public let maxOutputTokens: Int
     public let temperature: Double
+    public let topP: Double
+    public let topK: Int
 
     public init(
         model: InferenceModelDescriptor,
         messages: [InferenceMessage],
         maxOutputTokens: Int = 512,
-        temperature: Double = 0.7
+        temperature: Double = 0.7,
+        topP: Double = 0.9,
+        topK: Int = 40
     ) {
         self.model = model
         self.messages = messages
         self.maxOutputTokens = max(1, maxOutputTokens)
         self.temperature = max(0.0, min(2.0, temperature))
+        self.topP = max(0.0, min(1.0, topP))
+        self.topK = max(0, topK)
     }
 }
 

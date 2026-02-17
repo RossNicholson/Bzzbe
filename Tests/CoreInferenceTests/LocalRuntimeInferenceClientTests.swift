@@ -167,6 +167,63 @@ struct LocalRuntimeInferenceClientTests {
         #expect(tokens.joined() == "Hello world")
     }
 
+    @Test("LocalRuntimeInferenceClient forwards generation controls in chat payload")
+    func forwardsGenerationControlsInPayload() async throws {
+        let requestCapture = RequestBodyCapture()
+        let session = makeStubbedSession { request in
+            if request.url?.path == "/api/show" {
+                return (
+                    HTTPURLResponse(url: request.url!, statusCode: 200, httpVersion: nil, headerFields: nil)!,
+                    Data("{}".utf8)
+                )
+            }
+
+            if request.url?.path == "/api/chat" {
+                requestCapture.set(bodyData(from: request))
+                let payload = """
+                {"done":true}
+                """
+                return (
+                    HTTPURLResponse(url: request.url!, statusCode: 200, httpVersion: nil, headerFields: nil)!,
+                    Data(payload.utf8)
+                )
+            }
+
+            return (
+                HTTPURLResponse(url: request.url!, statusCode: 404, httpVersion: nil, headerFields: nil)!,
+                Data()
+            )
+        }
+
+        let client = LocalRuntimeInferenceClient(
+            configuration: LocalRuntimeConfiguration(baseURL: URL(string: "http://127.0.0.1:11434")!),
+            urlSession: session
+        )
+
+        let model = InferenceModelDescriptor(identifier: "qwen3:8b", displayName: "Qwen 3 8B", contextWindow: 32_768)
+        try await client.loadModel(model)
+
+        let request = InferenceRequest(
+            model: model,
+            messages: [.init(role: .user, content: "hello")],
+            maxOutputTokens: 333,
+            temperature: 0.35,
+            topP: 0.82,
+            topK: 51
+        )
+        let stream = await client.streamCompletion(request)
+        for try await _ in stream {}
+
+        let payloadData = try #require(requestCapture.value())
+        let payloadAny = try #require(JSONSerialization.jsonObject(with: payloadData) as? [String: Any])
+        let options = try #require(payloadAny["options"] as? [String: Any])
+
+        #expect(options["num_predict"] as? Int == 333)
+        #expect(options["top_k"] as? Int == 51)
+        #expect(options["temperature"] as? Double == 0.35)
+        #expect(options["top_p"] as? Double == 0.82)
+    }
+
     private func makeStubbedSession(
         handler: @escaping (URLRequest) -> (HTTPURLResponse, Data)
     ) -> URLSession {
@@ -201,4 +258,45 @@ private final class URLProtocolStub: URLProtocol {
     }
 
     override func stopLoading() {}
+}
+
+private final class RequestBodyCapture: @unchecked Sendable {
+    private var body: Data?
+    private let lock = NSLock()
+
+    func set(_ body: Data?) {
+        lock.lock()
+        defer { lock.unlock() }
+        self.body = body
+    }
+
+    func value() -> Data? {
+        lock.lock()
+        defer { lock.unlock() }
+        return body
+    }
+}
+
+private func bodyData(from request: URLRequest) -> Data? {
+    if let body = request.httpBody {
+        return body
+    }
+    guard let stream = request.httpBodyStream else { return nil }
+
+    stream.open()
+    defer { stream.close() }
+
+    var data = Data()
+    var buffer = [UInt8](repeating: 0, count: 1024)
+    while stream.hasBytesAvailable {
+        let bytesRead = stream.read(&buffer, maxLength: buffer.count)
+        if bytesRead < 0 {
+            return nil
+        }
+        if bytesRead == 0 {
+            break
+        }
+        data.append(buffer, count: bytesRead)
+    }
+    return data
 }

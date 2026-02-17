@@ -34,6 +34,65 @@ final class ChatViewModel: ObservableObject {
         let action: Action
     }
 
+    struct GenerationParameters: Equatable {
+        let temperature: Double
+        let topP: Double
+        let topK: Int
+        let maxOutputTokens: Int
+    }
+
+    enum GenerationPreset: String, CaseIterable, Identifiable {
+        case accurate
+        case balanced
+        case creative
+        case custom
+
+        var id: String { rawValue }
+
+        var title: String {
+            switch self {
+            case .accurate:
+                return "Accurate"
+            case .balanced:
+                return "Balanced"
+            case .creative:
+                return "Creative"
+            case .custom:
+                return "Custom"
+            }
+        }
+
+        var parameters: GenerationParameters? {
+            switch self {
+            case .accurate:
+                return GenerationParameters(
+                    temperature: 0.2,
+                    topP: 0.7,
+                    topK: 20,
+                    maxOutputTokens: 512
+                )
+            case .balanced:
+                return GenerationParameters(
+                    temperature: 0.7,
+                    topP: 0.9,
+                    topK: 40,
+                    maxOutputTokens: 768
+                )
+            case .creative:
+                return GenerationParameters(
+                    temperature: 1.1,
+                    topP: 0.97,
+                    topK: 80,
+                    maxOutputTokens: 1024
+                )
+            case .custom:
+                return nil
+            }
+        }
+
+        static let selectableCases: [GenerationPreset] = [.accurate, .balanced, .creative, .custom]
+    }
+
     @Published var draft: String = ""
     @Published private(set) var conversations: [Conversation] = []
     @Published private(set) var messages: [Message] = []
@@ -42,8 +101,17 @@ final class ChatViewModel: ObservableObject {
     @Published private(set) var recoveryHint: RecoveryHint?
     @Published private(set) var lastPrompt: String?
     @Published private(set) var activeConversationID: String?
+    @Published private(set) var selectedPreset: GenerationPreset = .balanced
+    @Published private(set) var temperature: Double = 0.7
+    @Published private(set) var topP: Double = 0.9
+    @Published private(set) var topK: Int = 40
+    @Published private(set) var maxOutputTokens: Int = 768
 
     let model: InferenceModelDescriptor
+    let temperatureRange: ClosedRange<Double> = 0.0 ... 2.0
+    let topPRange: ClosedRange<Double> = 0.0 ... 1.0
+    let topKRange: ClosedRange<Int> = 1 ... 200
+    let maxOutputTokenRange: ClosedRange<Int> = 128 ... 4096
 
     private let inferenceClient: any InferenceClient
     private let conversationStore: any ConversationStoring
@@ -83,6 +151,35 @@ final class ChatViewModel: ObservableObject {
 
     var canDeleteActiveConversation: Bool {
         !isStreaming && activeConversationID != nil
+    }
+
+    func applyPreset(_ preset: GenerationPreset) {
+        guard let parameters = preset.parameters else { return }
+        selectedPreset = preset
+        temperature = normalizedTemperature(parameters.temperature)
+        topP = normalizedTopP(parameters.topP)
+        topK = normalizedTopK(parameters.topK)
+        maxOutputTokens = normalizedMaxOutputTokens(parameters.maxOutputTokens)
+    }
+
+    func setTemperature(_ value: Double) {
+        temperature = normalizedTemperature(value)
+        refreshPresetSelection()
+    }
+
+    func setTopP(_ value: Double) {
+        topP = normalizedTopP(value)
+        refreshPresetSelection()
+    }
+
+    func setTopK(_ value: Int) {
+        topK = normalizedTopK(value)
+        refreshPresetSelection()
+    }
+
+    func setMaxOutputTokens(_ value: Int) {
+        maxOutputTokens = normalizedMaxOutputTokens(value)
+        refreshPresetSelection()
     }
 
     func sendDraft() {
@@ -177,7 +274,14 @@ final class ChatViewModel: ObservableObject {
         lastPrompt = prompt
         messages.append(.init(role: .user, content: prompt))
 
-        let request = InferenceRequest(model: model, messages: inferenceMessages())
+        let request = InferenceRequest(
+            model: model,
+            messages: inferenceMessages(),
+            maxOutputTokens: maxOutputTokens,
+            temperature: temperature,
+            topP: topP,
+            topK: topK
+        )
         let pendingAssistant = Message(role: .assistant, content: "")
         messages.append(pendingAssistant)
         assistantMessageID = pendingAssistant.id
@@ -433,6 +537,36 @@ final class ChatViewModel: ObservableObject {
             || normalized.contains("unknown model")
     }
 
+    private func normalizedTemperature(_ value: Double) -> Double {
+        max(temperatureRange.lowerBound, min(temperatureRange.upperBound, value))
+    }
+
+    private func normalizedTopP(_ value: Double) -> Double {
+        max(topPRange.lowerBound, min(topPRange.upperBound, value))
+    }
+
+    private func normalizedTopK(_ value: Int) -> Int {
+        max(topKRange.lowerBound, min(topKRange.upperBound, value))
+    }
+
+    private func normalizedMaxOutputTokens(_ value: Int) -> Int {
+        max(maxOutputTokenRange.lowerBound, min(maxOutputTokenRange.upperBound, value))
+    }
+
+    private func refreshPresetSelection() {
+        if let matchingPreset = GenerationPreset.selectableCases.first(where: { preset in
+            guard let parameters = preset.parameters else { return false }
+            return abs(parameters.temperature - temperature) < 0.001
+                && abs(parameters.topP - topP) < 0.001
+                && parameters.topK == topK
+                && parameters.maxOutputTokens == maxOutputTokens
+        }) {
+            selectedPreset = matchingPreset
+        } else {
+            selectedPreset = .custom
+        }
+    }
+
     private static func defaultConversationStore() -> any ConversationStoring {
         if let sqliteStore = try? SQLiteConversationStore.defaultStore() {
             return sqliteStore
@@ -564,6 +698,41 @@ struct ChatView: View {
         )
     }
 
+    private var presetBinding: Binding<ChatViewModel.GenerationPreset> {
+        Binding(
+            get: { viewModel.selectedPreset },
+            set: { viewModel.applyPreset($0) }
+        )
+    }
+
+    private var temperatureBinding: Binding<Double> {
+        Binding(
+            get: { viewModel.temperature },
+            set: { viewModel.setTemperature($0) }
+        )
+    }
+
+    private var topPBinding: Binding<Double> {
+        Binding(
+            get: { viewModel.topP },
+            set: { viewModel.setTopP($0) }
+        )
+    }
+
+    private var topKBinding: Binding<Int> {
+        Binding(
+            get: { viewModel.topK },
+            set: { viewModel.setTopK($0) }
+        )
+    }
+
+    private var maxOutputTokenBinding: Binding<Int> {
+        Binding(
+            get: { viewModel.maxOutputTokens },
+            set: { viewModel.setMaxOutputTokens($0) }
+        )
+    }
+
     private var header: some View {
         VStack(alignment: .leading, spacing: 4) {
             Text("Chat")
@@ -622,6 +791,8 @@ struct ChatView: View {
                 .lineLimit(1...4)
                 .disabled(viewModel.isStreaming)
 
+            generationControls
+
             HStack(spacing: 8) {
                 Button("Send") {
                     viewModel.sendDraft()
@@ -641,6 +812,60 @@ struct ChatView: View {
             }
             .frame(maxWidth: .infinity, alignment: .trailing)
         }
+    }
+
+    private var generationControls: some View {
+        GroupBox("Generation") {
+            VStack(alignment: .leading, spacing: 10) {
+                Picker("Preset", selection: presetBinding) {
+                    ForEach(ChatViewModel.GenerationPreset.selectableCases) { preset in
+                        Text(preset.title).tag(preset)
+                    }
+                }
+                .pickerStyle(.segmented)
+                .labelsHidden()
+
+                HStack(spacing: 10) {
+                    Text("Temp")
+                        .font(.footnote)
+                        .foregroundStyle(.secondary)
+                    Slider(
+                        value: temperatureBinding,
+                        in: viewModel.temperatureRange,
+                        step: 0.05
+                    )
+                    Text(viewModel.temperature, format: .number.precision(.fractionLength(2)))
+                        .font(.footnote.monospacedDigit())
+                        .frame(width: 44, alignment: .trailing)
+                }
+
+                HStack(spacing: 10) {
+                    Text("Top-p")
+                        .font(.footnote)
+                        .foregroundStyle(.secondary)
+                    Slider(
+                        value: topPBinding,
+                        in: viewModel.topPRange,
+                        step: 0.01
+                    )
+                    Text(viewModel.topP, format: .number.precision(.fractionLength(2)))
+                        .font(.footnote.monospacedDigit())
+                        .frame(width: 44, alignment: .trailing)
+                }
+
+                HStack(spacing: 16) {
+                    Stepper(value: topKBinding, in: viewModel.topKRange, step: 1) {
+                        Text("Top-k: \(viewModel.topK)")
+                            .font(.footnote)
+                    }
+                    Stepper(value: maxOutputTokenBinding, in: viewModel.maxOutputTokenRange, step: 64) {
+                        Text("Max tokens: \(viewModel.maxOutputTokens)")
+                            .font(.footnote)
+                    }
+                }
+            }
+        }
+        .disabled(viewModel.isStreaming)
     }
 }
 

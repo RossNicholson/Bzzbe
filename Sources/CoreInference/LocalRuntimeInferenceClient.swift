@@ -287,7 +287,9 @@ private struct ChatRequest: Encodable {
         self.stream = true
         self.options = ChatOptions(
             temperature: request.temperature,
-            numPredict: request.maxOutputTokens
+            numPredict: request.maxOutputTokens,
+            topP: request.topP,
+            topK: request.topK
         )
     }
 }
@@ -300,10 +302,14 @@ private struct ChatMessage: Encodable {
 private struct ChatOptions: Encodable {
     let temperature: Double
     let numPredict: Int
+    let topP: Double
+    let topK: Int
 
     enum CodingKeys: String, CodingKey {
         case temperature
         case numPredict = "num_predict"
+        case topP = "top_p"
+        case topK = "top_k"
     }
 }
 
