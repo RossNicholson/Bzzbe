@@ -1,70 +1,34 @@
-# Bzzbe Implementation Plan
+# Bzzbe Roadmap (Open Work)
 
-## Phase 0 — Product definition (1-2 weeks)
+Last updated: 2026-02-17
 
-- Define v1 scope and non-goals.
-- Finalize compatible open-source models and license checks.
-- Decide primary runtime approach (embedded vs helper process).
-- Validate App Store review constraints with a minimal prototype.
+This document tracks forward-looking work only.
 
-Deliverables:
-- Product requirements doc.
-- App architecture decision record.
-- Compliance checklist.
+## Near-term priorities
 
-## Phase 1 — Local chat MVP (2-4 weeks)
+1. Performance validation
+   - Capture real runtime metrics on at least two Apple Silicon tiers.
+   - Update `docs/reports/alpha-01.md` with reproducible results.
+   - Keep `docs/reports/ALPHA_PERF_RUNBOOK.md` aligned with actual benchmark procedure.
 
-- Build SwiftUI shell with chat screen and settings.
-- Integrate local inference backend with token streaming.
-- Support one default model profile and basic conversation persistence.
+2. Installer and runtime resilience polish
+   - Reduce setup failure paths that still require manual user retry.
+   - Improve UX messaging for runtime startup/restart edge cases.
+   - Add additional diagnostics where runtime connectivity is unstable.
 
-Deliverables:
-- Internal alpha for local chat.
-- Baseline performance metrics on M1/M2/M3 devices.
+3. Task and automation UX hardening
+   - Improve scheduler/sub-agent clarity in the Tasks view.
+   - Refine risk-approval and sandbox messaging for non-technical users.
+   - Add end-to-end QA scenarios for task execution lifecycle flows.
 
-## Phase 2 — Smart installer (2-3 weeks)
+4. Distribution readiness
+   - Continue sandbox/signing/notarization hardening for macOS distribution.
+   - Keep privacy defaults and permission prompts aligned with release policy.
+   - Prepare release checklist for public beta packaging.
 
-- Implement hardware profiler and recommendation engine.
-- Build robust download/install pipeline with resume + checksum validation.
-- Add model manager UI (install/update/remove).
+## Quality gates
 
-Deliverables:
-- One-click setup flow.
-- Stable installer behavior under network interruption.
-
-## Phase 3 — Agent task framework (3-5 weeks)
-
-- Introduce task templates with structured plans.
-- Add limited tool interfaces (file organizer, summarizer, code helper).
-- Add run history and execution audit log.
-
-Deliverables:
-- First set of user-facing agent tasks.
-- Consent UI and policy controls for tool usage.
-
-## Phase 4 — Polish, QA, and App Store submission (2-4 weeks)
-
-- Improve onboarding, error states, and recovery flows.
-- Performance tuning and memory stability pass.
-- Complete signing, notarization, and App Store metadata.
-
-Deliverables:
-- Release candidate.
-- App Store submission package.
-
-## Suggested workstream ownership
-
-- **Core app/UI**: SwiftUI + UX
-- **Inference/runtime**: model serving + performance
-- **Installer/platform**: packaging + updates + validation
-- **Security/compliance**: sandbox, permissions, App Store policy
-
-## Initial engineering checklist
-
-1. Create Xcode project with modular package layout.
-2. Add hardware profile service abstraction + unit tests.
-3. Add backend adapter protocol for inference runtime.
-4. Implement chat state store and local DB.
-5. Build installer pipeline with resumable downloads.
-6. Add telemetry toggle (off by default).
-7. Add CI for lint + tests + basic static checks.
+- `swift test` must pass on every release candidate.
+- Setup flow should complete from a clean install without terminal steps.
+- Chat and task flows must be functional without data loss across relaunch.
+- Public docs should avoid internal/completed task tracking and competitor planning notes.

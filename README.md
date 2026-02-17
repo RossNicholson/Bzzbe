@@ -40,45 +40,27 @@ Bzzbe is an open-source macOS app (Apple Silicon only) that installs and runs lo
 ## Repo contents
 
 - `docs/ARCHITECTURE.md`: system design and module boundaries.
-- `docs/IMPLEMENTATION_PLAN.md`: build phases and milestones.
+- `docs/IMPLEMENTATION_PLAN.md`: active roadmap (open work only).
 - `docs/AGENT_TASKS.md`: starter list of built-in agent workflows.
-- `docs/PHASE1_BACKLOG.md`: execution-ready backlog with acceptance criteria.
-- `docs/JOB_LIST.md`: detailed assignable jobs with dependencies and DoD.
 - `docs/MODEL_RESEARCH.md`: Apple Silicon model-family research and v1 tier recommendations.
-- `docs/TASK_STATUS_REVIEW.md`: checkpoint review of completed vs remaining jobs and next execution order.
+- `docs/reports/ALPHA_PERF_RUNBOOK.md`: perf run checklist for alpha measurements.
+- `docs/reports/alpha-01.md`: current benchmark report snapshot.
 
-## Current implementation status
+## Current capabilities
 
-- ✅ JOB-001 complete: Swift package scaffold with `BzzbeApp`, core modules, tests, and CI workflow.
-- ✅ JOB-002 complete: SwiftUI app shell with Chat/Tasks/Models/Settings navigation placeholders.
-- ✅ JOB-003 complete: launch-time Apple Silicon gate with unsupported-Mac screen.
-- ✅ JOB-004 complete: hardware capability profiler with settings debug surface.
-- ✅ JOB-005 complete: hardened inference abstraction with cancellable streaming request model.
-- ✅ JOB-006 complete: chat route now supports prompt send, streaming response rendering, stop, and retry controls.
-- ✅ JOB-011 complete: SQLite conversation storage with CRUD operations, test coverage, and chat persistence/restore wiring.
-- ✅ JOB-007 complete: first-run onboarding flow with hardware-aware recommendation, install progress, and failure/retry states.
-- ✅ JOB-008 complete: resumable artifact download manager with progress stream and installer integration.
-- ✅ JOB-009 complete: SHA-256 artifact verification enforced before install completion with mismatch handling and tests.
-- ✅ JOB-013 complete: local runtime streaming client integrated via `InferenceClient` with protocol-level tests and chat wired to real backend.
-- ✅ JOB-010 complete: installed model metadata now persists locally after verified setup.
-- ✅ JOB-012 complete: chat now includes conversation history sidebar with restore/select/delete flows plus view model tests.
-- ✅ JOB-014 complete: settings now expose local-first consent messaging with telemetry/diagnostics opt-in controls defaulting to off.
-- ✅ JOB-015 complete: installer/model action events are now recorded, visible in Settings, and exportable as text.
-- 🟡 JOB-016 in progress: benchmark harness now emits host metadata + runtime-process RSS with alpha-01 baseline report; real runtime/two-tier capture remains open in defect triage.
-- ✅ JOB-017 complete: chat recovery now surfaces actionable offline/missing-model guidance with one-click retry or setup rerun.
-- ✅ Runtime bootstrap hardening: app now starts runtime headlessly from bundled CLI path before fallback app launch.
-- ✅ Provider import hardening: provider artifacts are uploaded as runtime blobs and then imported via `/api/create` `files` mapping.
-- ✅ Retry UX hardening: setup retries now reuse previously downloaded provider artifact files when present.
-- ✅ Personal memory context: optional local `MEMORY.md` can now be edited in Settings and injected into chat as system context.
-- ✅ Chat slash commands: local quick controls for presets/tuning, new conversation, and context compaction (`/help` for command list).
-- ✅ Chat model failover: runtime/model failures can now trigger automatic fallback to an alternate local model with cooldown-based retry behavior.
-- ✅ Tool permission profiles: `Read-only`/`Local files`/`Advanced` profiles with layered policy evaluation and task-level enforcement.
-- ✅ Risky-action approvals: task runs requiring risky access now require explicit `Allow Once`, `Always Allow`, or `Deny`, with local persistence for always-allow decisions.
-- ✅ Sandbox hardening: risky task runs now pass local sandbox guardrails for path/network/escalation/mount checks, with diagnostics shown when policy config is unsafe.
-- ✅ Skills system: Bzzbe now discovers skills from workspace/user/bundled directories with precedence rules, metadata gating checks, and settings-level enable/disable controls.
-- ✅ Scheduled jobs: one-shot and recurring task jobs now persist locally with run logs, retry behavior, and task-workspace controls to run due jobs.
-- ✅ Sub-agent orchestration: background child task runs now have lifecycle tracking, cancel controls, and safe output handoff back into the main task input.
-- ✅ Memory upgrade: personal memory now supports layered context (`MEMORY.md` + dated notes), local note search, and private/shared scope controls.
+- First-run onboarding with hardware-aware model recommendation and manual model override.
+- Local runtime bootstrap/recovery flow with provider import plus runtime-registry fallback.
+- Streaming chat with stop/retry controls and persisted conversation history.
+- Chat slash commands for presets, tuning controls, and context compaction.
+- Automatic model failover ladder for retryable runtime/model failures.
+- Task workspace with layered permission policy evaluation and clear block reasons.
+- Explicit risky-action approval flow (`Allow Once`, `Always Allow`, `Deny`).
+- Sandbox guardrails for risky task input (path/network/escalation/mount checks).
+- Local skills discovery with precedence (workspace > user > bundled) and gating checks.
+- Persisted one-shot/recurring scheduled jobs with run logs and retry behavior.
+- Sub-agent background runs with lifecycle tracking, cancellation, and output handoff.
+- Layered local memory (`MEMORY.md` + dated notes) with scoped note search.
+- Local-first privacy defaults and installer/model action logging in Settings.
 
 ## Troubleshooting
 
@@ -96,12 +78,9 @@ Bzzbe is an open-source macOS app (Apple Silicon only) that installs and runs lo
 - `Cannot index window tabs due to missing main bundle identifier` (Xcode console):
   - Common warning when running as an SPM executable context; not the primary runtime failure signal.
 
-## Early roadmap summary
+## Roadmap
 
-- Build a functional local chat MVP first.
-- Add robust installer + hardware detection.
-- Add agent task catalog and safe local tool execution.
-- Harden sandboxing/signing/notarization for App Store compliance.
+- Active roadmap items are tracked in `docs/IMPLEMENTATION_PLAN.md`.
 
 ## Notes on App Store strategy
 
