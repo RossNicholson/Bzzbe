@@ -30,10 +30,12 @@ final class TaskWorkspaceViewModel: ObservableObject {
     @Published private(set) var statusText: String = "Choose a task and run it."
     @Published private(set) var errorMessage: String?
     @Published private(set) var runHistory: [TaskRun] = []
+    @Published private(set) var toolPermissionProfile: AgentToolAccessLevel
 
     let model: InferenceModelDescriptor
 
     private let inferenceClient: any InferenceClient
+    private let toolPermissionProvider: any ToolPermissionProfileProviding
     private var streamTask: Task<Void, Never>?
     private var activeRequestID: UUID?
     private var activeTaskTemplate: AgentTaskTemplate?
@@ -43,12 +45,15 @@ final class TaskWorkspaceViewModel: ObservableObject {
     init(
         catalog: AgentCatalog = AgentCatalog(),
         inferenceClient: any InferenceClient = LocalRuntimeInferenceClient(),
+        toolPermissionProvider: any ToolPermissionProfileProviding = DefaultsToolPermissionProfileProvider(),
         model: InferenceModelDescriptor
     ) {
         let templates = catalog.templates()
         self.tasks = templates
         self.selectedTaskID = templates.first?.id ?? ""
         self.inferenceClient = inferenceClient
+        self.toolPermissionProvider = toolPermissionProvider
+        self.toolPermissionProfile = toolPermissionProvider.currentProfile()
         self.model = model
     }
 
@@ -56,8 +61,13 @@ final class TaskWorkspaceViewModel: ObservableObject {
         tasks.first(where: { $0.id == selectedTaskID })
     }
 
+    var hasPermissionForSelectedTask: Bool {
+        guard let selectedTask else { return true }
+        return toolPermissionProfile.satisfies(selectedTask.requiredToolAccess)
+    }
+
     var canRun: Bool {
-        !isRunning && !trimmedInput.isEmpty && selectedTask != nil
+        !isRunning && !trimmedInput.isEmpty && selectedTask != nil && hasPermissionForSelectedTask
     }
 
     var canCancel: Bool {
@@ -66,8 +76,14 @@ final class TaskWorkspaceViewModel: ObservableObject {
 
     func runSelectedTask() {
         guard !isRunning else { return }
+        refreshToolPermissionProfile()
         guard let task = selectedTask else {
             statusText = "No task selected."
+            return
+        }
+        guard toolPermissionProfile.satisfies(task.requiredToolAccess) else {
+            errorMessage = "Task requires \(task.requiredToolAccess.title) tool profile. Current profile is \(toolPermissionProfile.title)."
+            statusText = "Task blocked by tool permission profile."
             return
         }
 
@@ -145,6 +161,10 @@ final class TaskWorkspaceViewModel: ObservableObject {
         output = ""
         statusText = "Output cleared."
         errorMessage = nil
+    }
+
+    func refreshToolPermissionProfile() {
+        toolPermissionProfile = toolPermissionProvider.currentProfile()
     }
 
     private var trimmedInput: String {
@@ -246,6 +266,12 @@ struct TaskWorkspaceView: View {
         }
         .padding(20)
         .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
+        .onAppear {
+            viewModel.refreshToolPermissionProfile()
+        }
+        .onChange(of: viewModel.selectedTaskID) { _, _ in
+            viewModel.refreshToolPermissionProfile()
+        }
     }
 
     private var header: some View {
@@ -277,6 +303,17 @@ struct TaskWorkspaceView: View {
                     Text(task.inputHint)
                         .font(.footnote)
                         .foregroundStyle(.secondary)
+                    Text("Required tool profile: \(task.requiredToolAccess.title)")
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                    Text("Current profile: \(viewModel.toolPermissionProfile.title)")
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                    if !viewModel.hasPermissionForSelectedTask {
+                        Text("This task is blocked by the current tool profile. Update profile in Settings.")
+                            .font(.caption)
+                            .foregroundStyle(.orange)
+                    }
                 }
 
                 HStack(spacing: 10) {

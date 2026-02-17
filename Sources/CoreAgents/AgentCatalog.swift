@@ -8,25 +8,71 @@ public struct AgentTask: Sendable, Equatable {
     }
 }
 
+public enum AgentToolAccessLevel: String, Sendable, Equatable, CaseIterable {
+    case readOnly = "read_only"
+    case localFiles = "local_files"
+    case advanced = "advanced"
+
+    public var title: String {
+        switch self {
+        case .readOnly:
+            return "Read-only"
+        case .localFiles:
+            return "Local files"
+        case .advanced:
+            return "Advanced"
+        }
+    }
+
+    public var summary: String {
+        switch self {
+        case .readOnly:
+            return "No external tools, content transformation only."
+        case .localFiles:
+            return "Allows local file planning and file-context workflows."
+        case .advanced:
+            return "Allows higher-trust tool use and automation workflows."
+        }
+    }
+
+    public var rank: Int {
+        switch self {
+        case .readOnly:
+            return 0
+        case .localFiles:
+            return 1
+        case .advanced:
+            return 2
+        }
+    }
+
+    public func satisfies(_ required: AgentToolAccessLevel) -> Bool {
+        rank >= required.rank
+    }
+}
+
 public struct AgentTaskTemplate: Sendable, Equatable, Identifiable {
     public let id: String
     public let name: String
     public let summary: String
     public let inputHint: String
     public let systemPrompt: String
+    public let requiredToolAccess: AgentToolAccessLevel
 
     public init(
         id: String,
         name: String,
         summary: String,
         inputHint: String,
-        systemPrompt: String
+        systemPrompt: String,
+        requiredToolAccess: AgentToolAccessLevel = .readOnly
     ) {
         self.id = id
         self.name = name
         self.summary = summary
         self.inputHint = inputHint
         self.systemPrompt = systemPrompt
+        self.requiredToolAccess = requiredToolAccess
     }
 }
 
@@ -49,7 +95,8 @@ public struct AgentCatalog {
                 1) A short overview.
                 2) Key points.
                 3) Clear next actions.
-                """
+                """,
+                requiredToolAccess: .readOnly
             ),
             AgentTaskTemplate(
                 id: "rewrite_tone",
@@ -59,7 +106,8 @@ public struct AgentCatalog {
                 systemPrompt: """
                 Rewrite the user's text in the requested tone while preserving intent.
                 Keep it concise and do not invent facts.
-                """
+                """,
+                requiredToolAccess: .readOnly
             ),
             AgentTaskTemplate(
                 id: "code_explain",
@@ -72,7 +120,8 @@ public struct AgentCatalog {
                 - Risks or bugs
                 - Improvements
                 Prefer direct, actionable feedback.
-                """
+                """,
+                requiredToolAccess: .readOnly
             ),
             AgentTaskTemplate(
                 id: "test_generation",
@@ -83,7 +132,8 @@ public struct AgentCatalog {
                 Generate targeted unit tests for the provided code.
                 Cover success, edge, and failure paths.
                 Keep tests deterministic.
-                """
+                """,
+                requiredToolAccess: .readOnly
             ),
             AgentTaskTemplate(
                 id: "organize_files_plan",
@@ -94,7 +144,8 @@ public struct AgentCatalog {
                 Build a safe file organization plan.
                 Always provide a dry-run preview first.
                 Never suggest destructive actions without explicit confirmation.
-                """
+                """,
+                requiredToolAccess: .localFiles
             )
         ]
     }

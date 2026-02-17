@@ -1,5 +1,6 @@
 #if canImport(SwiftUI)
 @testable import BzzbeApp
+import CoreAgents
 import CoreInference
 import Foundation
 import Testing
@@ -64,10 +65,52 @@ func taskWorkspaceRecordsFailure() async throws {
     #expect(viewModel.errorMessage?.contains("Connection refused") == true)
 }
 
+@MainActor
+@Test("TaskWorkspaceViewModel blocks task runs when tool profile is insufficient")
+func taskWorkspaceBlocksInsufficientToolProfile() async throws {
+    let client = StubTaskInferenceClient(
+        events: [
+            .started(modelIdentifier: "qwen3:8b"),
+            .token("Should not run"),
+            .completed
+        ]
+    )
+    let model = InferenceModelDescriptor(
+        identifier: "qwen3:8b",
+        displayName: "Qwen 3 8B",
+        contextWindow: 32_768
+    )
+    let viewModel = TaskWorkspaceViewModel(
+        inferenceClient: client,
+        toolPermissionProvider: StubToolPermissionProfileProvider(profile: .readOnly),
+        model: model
+    )
+
+    viewModel.selectedTaskID = "organize_files_plan"
+    viewModel.userInput = "Plan a folder structure for my downloads."
+    viewModel.runSelectedTask()
+
+    #expect(viewModel.isRunning == false)
+    #expect(viewModel.runHistory.isEmpty)
+    #expect(viewModel.errorMessage?.contains("requires Local files") == true)
+    #expect(await client.loadModelCallCount == 0)
+    #expect(await client.streamCallCount == 0)
+}
+
+private struct StubToolPermissionProfileProvider: ToolPermissionProfileProviding {
+    let profile: AgentToolAccessLevel
+
+    func currentProfile() -> AgentToolAccessLevel {
+        profile
+    }
+}
+
 private actor StubTaskInferenceClient: InferenceClient {
     private let events: [InferenceEvent]
     private let loadError: Error?
     private let streamError: Error?
+    private(set) var loadModelCallCount: Int = 0
+    private(set) var streamCallCount: Int = 0
 
     init(
         events: [InferenceEvent],
@@ -80,13 +123,15 @@ private actor StubTaskInferenceClient: InferenceClient {
     }
 
     func loadModel(_ model: InferenceModelDescriptor) async throws {
+        loadModelCallCount += 1
         if let loadError {
             throw loadError
         }
     }
 
     func streamCompletion(_ request: InferenceRequest) async -> AsyncThrowingStream<InferenceEvent, Error> {
-        AsyncThrowingStream { continuation in
+        streamCallCount += 1
+        return AsyncThrowingStream { continuation in
             for event in events {
                 continuation.yield(event)
             }

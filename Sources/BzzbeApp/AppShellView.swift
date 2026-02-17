@@ -1,4 +1,5 @@
 #if canImport(SwiftUI)
+import CoreAgents
 import CoreHardware
 import CoreInference
 import CoreInstaller
@@ -130,6 +131,7 @@ private struct SettingsView: View {
     @StateObject private var privacySettings = PrivacySettingsModel()
     @StateObject private var actionLogModel = InstallerActionLogModel()
     @StateObject private var memorySettings = UserMemorySettingsModel()
+    @StateObject private var toolPermissionSettings = ToolPermissionSettingsModel()
 
     var body: some View {
         ScrollView {
@@ -163,6 +165,27 @@ private struct SettingsView: View {
                     VStack(alignment: .leading, spacing: 6) {
                         Text("Usage telemetry: \(privacySettings.telemetryEnabled ? "Enabled" : "Disabled")")
                         Text("Crash diagnostics: \(privacySettings.diagnosticsEnabled ? "Enabled" : "Disabled")")
+                    }
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                }
+
+                GroupBox("Tool permission profile") {
+                    VStack(alignment: .leading, spacing: 10) {
+                        Picker("Profile", selection: $toolPermissionSettings.selectedProfile) {
+                            ForEach(AgentToolAccessLevel.allCases, id: \.self) { profile in
+                                Text(profile.title).tag(profile)
+                            }
+                        }
+                        .pickerStyle(.segmented)
+                        .labelsHidden()
+
+                        Text(toolPermissionSettings.selectedProfile.summary)
+                            .font(.footnote)
+                            .foregroundStyle(.secondary)
+
+                        Text("Tasks that require higher trust are blocked unless this profile is elevated.")
+                            .font(.caption)
+                            .foregroundStyle(.secondary)
                     }
                     .frame(maxWidth: .infinity, alignment: .leading)
                 }

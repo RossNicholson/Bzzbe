@@ -28,10 +28,13 @@ MIT licensing permits code reuse with attribution and license preservation in co
   - `/help`, `/new`
   - `/preset <accurate|balanced|creative>`
   - `/temperature`, `/top-p`, `/top-k`, `/max-tokens`
+- Tool permission profiles with runtime task enforcement:
+  - `Read-only`, `Local files`, `Advanced`
+  - Tasks that require higher trust are blocked until profile is elevated.
 
 ### Good next candidates
 
-1. Tool permission profiles (`Read-only`, `Local files`, `Advanced`) with explicit consent prompts.
+1. Explicit consent prompts when changing from `Read-only` to elevated profiles.
 2. Plugin/MCP connector surface in Settings.
 3. Slash commands in chat/task input (`/summarize`, `/test`, `/rewrite`).
 
