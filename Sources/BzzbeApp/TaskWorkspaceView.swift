@@ -85,6 +85,7 @@ final class TaskWorkspaceViewModel: ObservableObject {
     @Published private(set) var toolPermissionProfile: AgentToolAccessLevel
     @Published private(set) var pendingApproval: TaskApprovalPrompt?
     @Published private(set) var sandboxStatusText: String = "Sandbox checks idle."
+    @Published private(set) var sandboxGuidance: [String] = []
     @Published private(set) var sandboxDiagnostics: [String] = []
     @Published var scheduleMode: ScheduleMode = .oneShot
     @Published var scheduledRunAt: Date = Date().addingTimeInterval(300)
@@ -161,7 +162,14 @@ final class TaskWorkspaceViewModel: ObservableObject {
 
     var selectedTaskBlockReason: String? {
         guard let selectedTask else { return nil }
-        return permissionEvaluation(for: selectedTask).failureReason
+        let evaluation = permissionEvaluation(for: selectedTask)
+        guard let reason = evaluation.userFacingFailureReason else {
+            return nil
+        }
+        if let settingsHint = evaluation.settingsHint {
+            return "\(reason) \(settingsHint)"
+        }
+        return reason
     }
 
     var selectedTaskEffectiveRequiredProfile: AgentToolAccessLevel? {
@@ -185,15 +193,19 @@ final class TaskWorkspaceViewModel: ObservableObject {
     func runSelectedTask() {
         guard !isRunning else { return }
         refreshToolPermissionProfile()
+        sandboxStatusText = "Sandbox checks idle."
+        sandboxGuidance = []
+        sandboxDiagnostics = []
         guard let task = selectedTask else {
             statusText = "No task selected."
             return
         }
         let permissionEvaluation = permissionEvaluation(for: task)
         guard permissionEvaluation.isAllowed else {
-            errorMessage = permissionEvaluation.failureReason
+            errorMessage = permissionEvaluation.userFacingFailureReason
+                ?? permissionEvaluation.failureReason
                 ?? "Task blocked by tool policy."
-            statusText = "Task blocked by tool policy pipeline."
+            statusText = permissionEvaluation.settingsHint ?? "Task blocked by tool policy pipeline."
             return
         }
 
@@ -213,10 +225,15 @@ final class TaskWorkspaceViewModel: ObservableObject {
             request: sandboxRequest,
             requiredProfile: effectiveRequiredProfile
         )
-        sandboxStatusText = sandboxEvaluation.summary
+        sandboxStatusText = sandboxEvaluation.userSummary
+        sandboxGuidance = sandboxEvaluation.remediationHints
         sandboxDiagnostics = sandboxEvaluation.configurationDiagnostics
         guard sandboxEvaluation.isAllowed else {
-            errorMessage = sandboxEvaluation.summary
+            if let firstHint = sandboxEvaluation.remediationHints.first {
+                errorMessage = "\(sandboxEvaluation.userSummary) \(firstHint)"
+            } else {
+                errorMessage = sandboxEvaluation.userSummary
+            }
             statusText = "Task blocked by sandbox policy."
             return
         }
@@ -768,8 +785,13 @@ struct TaskWorkspaceView: View {
                     Text("Sandbox: \(viewModel.sandboxStatusText)")
                         .font(.caption)
                         .foregroundStyle(.secondary)
+                    if !viewModel.sandboxGuidance.isEmpty {
+                        Text("How to unblock: \(viewModel.sandboxGuidance.joined(separator: " | "))")
+                            .font(.caption)
+                            .foregroundStyle(.secondary)
+                    }
                     if !viewModel.sandboxDiagnostics.isEmpty {
-                        Text("Sandbox diagnostics: \(viewModel.sandboxDiagnostics.joined(separator: " | "))")
+                        Text("Sandbox config diagnostics: \(viewModel.sandboxDiagnostics.joined(separator: " | "))")
                             .font(.caption)
                             .foregroundStyle(.orange)
                     }

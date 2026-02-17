@@ -93,6 +93,7 @@ func taskWorkspaceBlocksInsufficientToolProfile() async throws {
     #expect(viewModel.isRunning == false)
     #expect(viewModel.runHistory.isEmpty)
     #expect(viewModel.errorMessage?.contains("requires Local files") == true)
+    #expect(viewModel.statusText.contains("Settings > Tools") == true)
     #expect(await client.loadModelCallCount == 0)
     #expect(await client.streamCallCount == 0)
 }

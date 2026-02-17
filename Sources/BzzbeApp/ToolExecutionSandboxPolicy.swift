@@ -95,6 +95,7 @@ struct ToolExecutionSandboxConfiguration {
 
 struct ToolExecutionSandboxEvaluation: Equatable {
     let violations: [ToolExecutionSandboxViolation]
+    let remediationHints: [String]
     let configurationDiagnostics: [String]
 
     var isAllowed: Bool {
@@ -106,6 +107,13 @@ struct ToolExecutionSandboxEvaluation: Equatable {
             return "Sandbox checks passed."
         }
         return "Sandbox blocked request: \(violations.map(\.message).joined(separator: " | "))"
+    }
+
+    var userSummary: String {
+        if isAllowed {
+            return "Safety checks passed."
+        }
+        return "Sandbox blocked request. Some requested actions are outside the allowed safety settings."
     }
 }
 
@@ -123,6 +131,7 @@ struct ToolExecutionSandboxPolicy {
         guard requiredProfile.rank >= AgentToolAccessLevel.localFiles.rank else {
             return ToolExecutionSandboxEvaluation(
                 violations: [],
+                remediationHints: [],
                 configurationDiagnostics: diagnostics()
             )
         }
@@ -145,8 +154,10 @@ struct ToolExecutionSandboxPolicy {
             violations.append(.disallowedMount(mount))
         }
 
+        let dedupedViolations = deduplicate(violations)
         return ToolExecutionSandboxEvaluation(
-            violations: deduplicate(violations),
+            violations: dedupedViolations,
+            remediationHints: remediationHints(for: dedupedViolations),
             configurationDiagnostics: diagnostics()
         )
     }
@@ -195,5 +206,42 @@ struct ToolExecutionSandboxPolicy {
             }
         }
         return deduped
+    }
+
+    private func remediationHints(for violations: [ToolExecutionSandboxViolation]) -> [String] {
+        var hints: [String] = []
+        let allowedPaths = configuration.allowedPathPrefixes
+            .map { URL(fileURLWithPath: $0).standardizedFileURL.path }
+            .sorted()
+        let allowedHosts = configuration.allowedNetworkHosts.sorted()
+
+        for violation in violations {
+            let hint: String
+            switch violation {
+            case .disallowedPath:
+                if allowedPaths.isEmpty {
+                    hint = "No safe file roots are configured. Add allowed file paths in app settings."
+                } else {
+                    hint = "Use file paths under: \(allowedPaths.joined(separator: ", "))."
+                }
+            case .disallowedNetworkHost:
+                if allowedHosts.isEmpty {
+                    hint = "Remove external URLs from this task, or allow required hosts in settings."
+                } else {
+                    hint = "Use only allowed network hosts: \(allowedHosts.joined(separator: ", "))."
+                }
+            case .hostNetworkDenied:
+                hint = "Remove host-network requests (for example '--network host')."
+            case .privilegeEscalationDenied:
+                hint = "Remove privilege escalation steps (for example 'sudo', 'as root', or '--privileged')."
+            case .disallowedMount:
+                hint = "Avoid restricted mount targets and use project/local paths instead."
+            }
+            if !hints.contains(hint) {
+                hints.append(hint)
+            }
+        }
+
+        return hints
     }
 }

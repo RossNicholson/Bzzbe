@@ -27,6 +27,18 @@ struct ToolPermissionEvaluation: Equatable {
         return "Task blocked by \(failedLayer.name): requires \(failedLayer.requiredProfile.title), current profile is \(activeProfile.title)."
     }
 
+    var userFacingFailureReason: String? {
+        guard let failedLayer = layers.first(where: { !$0.isSatisfied }) else {
+            return nil
+        }
+        return "\(failedLayer.name) requires \(failedLayer.requiredProfile.title) access, but current profile is \(activeProfile.title)."
+    }
+
+    var settingsHint: String? {
+        guard !isAllowed else { return nil }
+        return "Open Settings > Tools and choose \(effectiveRequiredProfile.title) or higher."
+    }
+
     var explanation: String {
         layers
             .map { layer in
