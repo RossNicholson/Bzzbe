@@ -92,6 +92,7 @@ final class TaskWorkspaceViewModel: ObservableObject {
     @Published private(set) var scheduledJobs: [ScheduledTaskJob] = []
     @Published private(set) var scheduledRunLogs: [ScheduledTaskRunLog] = []
     @Published private(set) var schedulerStatusText: String = "No scheduled jobs yet."
+    @Published private(set) var schedulerSummaryText: String = "No scheduled jobs."
     @Published private(set) var subAgentRuns: [SubAgentRun] = []
 
     let model: InferenceModelDescriptor
@@ -174,6 +175,11 @@ final class TaskWorkspaceViewModel: ObservableObject {
 
     var canCancel: Bool {
         isRunning
+    }
+
+    var dueScheduledJobCount: Int {
+        let now = nowProvider()
+        return scheduledJobs.filter { $0.nextRunAt <= now }.count
     }
 
     func runSelectedTask() {
@@ -514,6 +520,7 @@ final class TaskWorkspaceViewModel: ObservableObject {
     func refreshScheduledState() {
         scheduledJobs = scheduledTaskScheduler.jobs()
         scheduledRunLogs = scheduledTaskScheduler.logs()
+        schedulerSummaryText = schedulerSummary(for: scheduledJobs, now: nowProvider())
     }
 
     private func updateSubAgent(runID: UUID, mutation: (inout SubAgentRun) -> Void) {
@@ -652,6 +659,22 @@ final class TaskWorkspaceViewModel: ObservableObject {
 
     private func isActiveRequest(_ requestID: UUID) -> Bool {
         activeRequestID == requestID
+    }
+
+    private func schedulerSummary(for jobs: [ScheduledTaskJob], now: Date) -> String {
+        guard !jobs.isEmpty else { return "No scheduled jobs." }
+        let dueCount = jobs.filter { $0.nextRunAt <= now }.count
+        let nextRunAt = jobs.map(\.nextRunAt).min() ?? now
+        let nextRunText = nextRunAt.formatted(date: .abbreviated, time: .shortened)
+        let jobCount = jobs.count
+        let jobLabel = jobCount == 1 ? "job" : "jobs"
+
+        if dueCount > 0 {
+            let dueLabel = dueCount == 1 ? "job" : "jobs"
+            return "\(dueCount) \(dueLabel) due now • \(jobCount) scheduled \(jobLabel) • next run \(nextRunText)"
+        }
+
+        return "\(jobCount) scheduled \(jobLabel) • next run \(nextRunText)"
     }
 }
 
@@ -883,6 +906,10 @@ struct TaskWorkspaceView: View {
                 Text(viewModel.schedulerStatusText)
                     .font(.footnote)
                     .foregroundStyle(.secondary)
+
+                Text(viewModel.schedulerSummaryText)
+                    .font(.footnote)
+                    .foregroundStyle(viewModel.dueScheduledJobCount > 0 ? .orange : .secondary)
 
                 if viewModel.scheduledJobs.isEmpty {
                     Text("No scheduled jobs.")

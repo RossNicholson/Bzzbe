@@ -355,6 +355,40 @@ func taskWorkspaceRunsDueScheduledJobs() async throws {
 }
 
 @MainActor
+@Test("TaskWorkspaceViewModel refreshes scheduler summary with due-now context")
+func taskWorkspaceRefreshesSchedulerSummary() async throws {
+    let client = StubTaskInferenceClient(events: [])
+    let model = InferenceModelDescriptor(
+        identifier: "qwen3:8b",
+        displayName: "Qwen 3 8B",
+        contextWindow: 32_768
+    )
+    let schedulerStore = InMemoryScheduledTaskStateStore()
+    let scheduler = JSONScheduledTaskScheduler(stateStore: schedulerStore)
+    var now = Date(timeIntervalSince1970: 8_000)
+    let viewModel = TaskWorkspaceViewModel(
+        inferenceClient: client,
+        scheduledTaskScheduler: scheduler,
+        nowProvider: { now },
+        model: model
+    )
+
+    viewModel.selectedTaskID = "summarize"
+    viewModel.userInput = "Summarize this weekly update."
+    viewModel.scheduleMode = .oneShot
+    viewModel.scheduledRunAt = now.addingTimeInterval(3_600)
+    viewModel.scheduleSelectedTask()
+
+    #expect(viewModel.schedulerSummaryText.contains("1 scheduled job"))
+    #expect(viewModel.dueScheduledJobCount == 0)
+
+    now = now.addingTimeInterval(3_601)
+    viewModel.refreshScheduledState()
+    #expect(viewModel.schedulerSummaryText.contains("1 job due now"))
+    #expect(viewModel.dueScheduledJobCount == 1)
+}
+
+@MainActor
 @Test("TaskWorkspaceViewModel tracks sub-agent lifecycle and output handoff")
 func taskWorkspaceTracksSubAgentLifecycle() async throws {
     let mainClient = StubTaskInferenceClient(events: [])
