@@ -26,6 +26,7 @@ final class InstallerOnboardingViewModel: ObservableObject {
     @Published private(set) var isRuntimeRecoveryVisible: Bool = false
     @Published private(set) var isRuntimeBootstrapInProgress: Bool = false
     @Published private(set) var runtimeBootstrapStatusMessage: String?
+    @Published private(set) var failureDiagnostics: [String] = []
 
     let profile: CapabilityProfile
 
@@ -98,6 +99,7 @@ final class InstallerOnboardingViewModel: ObservableObject {
         recommendation = installerService.recommendedInstall(for: profile)
         availableCandidates = installerService.compatibleCandidates(for: profile)
         recommendedCandidateID = recommendation.candidate?.id
+        failureDiagnostics = []
 
         if let selectedCandidateID,
            availableCandidates.contains(where: { $0.id == selectedCandidateID }) {
@@ -116,6 +118,7 @@ final class InstallerOnboardingViewModel: ObservableObject {
 
     func startInstall() {
         guard recommendation.status == .ready, let candidate = selectedCandidate else {
+            failureDiagnostics = []
             logAction(
                 category: "install.blocked",
                 message: "Install blocked due to insufficient resources: \(insufficientResourcesMessage())"
@@ -126,6 +129,7 @@ final class InstallerOnboardingViewModel: ObservableObject {
 
         isRuntimeRecoveryVisible = false
         runtimeBootstrapStatusMessage = nil
+        failureDiagnostics = []
         installTask?.cancel()
         installTask = Task { [weak self] in
             await self?.performInstallFlow(candidate: candidate)
@@ -239,6 +243,7 @@ final class InstallerOnboardingViewModel: ObservableObject {
             installTask = nil
             activeProviderDownloadID = nil
             isRuntimeRecoveryVisible = false
+            failureDiagnostics = []
             logAction(category: "install.cancelled", message: "Install was cancelled by the user.")
         } catch {
             isInstalling = false
@@ -254,6 +259,7 @@ final class InstallerOnboardingViewModel: ObservableObject {
             installTask = nil
             activeProviderDownloadID = nil
             logAction(category: "install.failed", message: error.localizedDescription)
+            failureDiagnostics = recentFailureDiagnostics()
         }
     }
 
@@ -794,6 +800,15 @@ final class InstallerOnboardingViewModel: ObservableObject {
         let entry = InstallerActionLogEntry(category: category, message: message)
         try? actionLogStore.append(entry)
     }
+
+    private func recentFailureDiagnostics(limit: Int = 8) -> [String] {
+        guard let entries = try? actionLogStore.listEntries(limit: limit), !entries.isEmpty else {
+            return []
+        }
+        return entries.map { entry in
+            "[\(entry.category)] \(entry.message)"
+        }
+    }
 }
 
 private enum InstallationFlowError: Error {
@@ -1016,6 +1031,21 @@ struct InstallerOnboardingView: View {
                 .foregroundStyle(.red)
             Text(message)
                 .foregroundStyle(.secondary)
+
+            if !viewModel.failureDiagnostics.isEmpty {
+                GroupBox("Recent Setup Diagnostics") {
+                    VStack(alignment: .leading, spacing: 6) {
+                        ForEach(Array(viewModel.failureDiagnostics.prefix(6)), id: \.self) { line in
+                            Text(line)
+                                .font(.caption)
+                                .foregroundStyle(.secondary)
+                                .textSelection(.enabled)
+                                .frame(maxWidth: .infinity, alignment: .leading)
+                        }
+                    }
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                }
+            }
 
             if viewModel.isRuntimeRecoveryVisible {
                 GroupBox("Runtime Setup") {

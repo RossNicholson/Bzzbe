@@ -194,6 +194,8 @@ func installerOnboardingFailsWhenRuntimePullUnavailable() async throws {
         errorMessage = ""
     }
     #expect(errorMessage.contains("Local runtime unavailable") || errorMessage.contains("Setup failed"))
+    #expect(!viewModel.failureDiagnostics.isEmpty)
+    #expect(viewModel.failureDiagnostics.contains(where: { $0.contains("install.failed") }))
 }
 
 @MainActor
