@@ -12,6 +12,12 @@ final class TaskWorkspaceViewModel: ObservableObject {
         case cancelled
     }
 
+    enum ApprovalDecision {
+        case allowOnce
+        case alwaysAllow
+        case deny
+    }
+
     struct TaskRun: Identifiable, Equatable {
         let id: UUID
         let startedAt: Date
@@ -20,6 +26,19 @@ final class TaskWorkspaceViewModel: ObservableObject {
         let inputPreview: String
         let outputPreview: String
         let status: RunStatus
+    }
+
+    struct TaskApprovalPrompt: Equatable {
+        let id: UUID
+        let taskID: String
+        let taskName: String
+        let reason: String
+        let expiresAt: Date
+    }
+
+    private struct PendingApprovalContext {
+        let task: AgentTaskTemplate
+        let input: String
     }
 
     @Published private(set) var tasks: [AgentTaskTemplate]
@@ -31,23 +50,31 @@ final class TaskWorkspaceViewModel: ObservableObject {
     @Published private(set) var errorMessage: String?
     @Published private(set) var runHistory: [TaskRun] = []
     @Published private(set) var toolPermissionProfile: AgentToolAccessLevel
+    @Published private(set) var pendingApproval: TaskApprovalPrompt?
 
     let model: InferenceModelDescriptor
 
     private let inferenceClient: any InferenceClient
     private let toolPermissionProvider: any ToolPermissionProfileProviding
     private let toolPermissionPolicyPipeline: ToolPermissionPolicyPipeline
+    private let taskApprovalRuleProvider: any TaskApprovalRuleProviding
+    private let nowProvider: () -> Date
+    private let approvalTimeout: TimeInterval
     private var streamTask: Task<Void, Never>?
     private var activeRequestID: UUID?
     private var activeTaskTemplate: AgentTaskTemplate?
     private var activeTaskInput: String = ""
     private var activeTaskStartedAt: Date = Date()
+    private var pendingApprovalContext: PendingApprovalContext?
 
     init(
         catalog: AgentCatalog = AgentCatalog(),
         inferenceClient: any InferenceClient = LocalRuntimeInferenceClient(),
         toolPermissionProvider: any ToolPermissionProfileProviding = DefaultsToolPermissionProfileProvider(),
         toolPermissionPolicyPipeline: ToolPermissionPolicyPipeline = ToolPermissionPolicyPipeline(),
+        taskApprovalRuleProvider: any TaskApprovalRuleProviding = DefaultsTaskApprovalRuleProvider(),
+        nowProvider: @escaping () -> Date = Date.init,
+        approvalTimeout: TimeInterval = 90,
         model: InferenceModelDescriptor
     ) {
         let templates = catalog.templates()
@@ -56,6 +83,9 @@ final class TaskWorkspaceViewModel: ObservableObject {
         self.inferenceClient = inferenceClient
         self.toolPermissionProvider = toolPermissionProvider
         self.toolPermissionPolicyPipeline = toolPermissionPolicyPipeline
+        self.taskApprovalRuleProvider = taskApprovalRuleProvider
+        self.nowProvider = nowProvider
+        self.approvalTimeout = approvalTimeout
         self.toolPermissionProfile = toolPermissionProvider.currentProfile()
         self.model = model
     }
@@ -113,6 +143,52 @@ final class TaskWorkspaceViewModel: ObservableObject {
             return
         }
 
+        if approvalShouldExpire() {
+            clearPendingApproval()
+        }
+
+        let effectiveRequiredProfile = permissionEvaluation.effectiveRequiredProfile
+        if requiresApproval(for: effectiveRequiredProfile), !taskApprovalRuleProvider.isAlwaysAllowed(taskID: task.id) {
+            if
+                let existingPrompt = pendingApproval,
+                existingPrompt.taskID == task.id,
+                pendingApprovalContext?.input == input
+            {
+                statusText = "Approval pending for \(task.name). Choose Allow Once, Always Allow, or Deny."
+                return
+            }
+            presentApprovalPrompt(for: task, input: input, requiredProfile: effectiveRequiredProfile)
+            return
+        }
+
+        startRun(task: task, input: input)
+    }
+
+    func resolvePendingApproval(_ decision: ApprovalDecision) {
+        if approvalShouldExpire() {
+            clearPendingApproval()
+            errorMessage = "Approval timed out. Retry task to request approval again."
+            statusText = "Approval timed out."
+            return
+        }
+        guard let approvalContext = pendingApprovalContext else { return }
+
+        switch decision {
+        case .allowOnce:
+            clearPendingApproval()
+            startRun(task: approvalContext.task, input: approvalContext.input)
+        case .alwaysAllow:
+            taskApprovalRuleProvider.allowAlways(taskID: approvalContext.task.id)
+            clearPendingApproval()
+            startRun(task: approvalContext.task, input: approvalContext.input)
+        case .deny:
+            clearPendingApproval()
+            errorMessage = "Task run denied by user approval choice."
+            statusText = "Run cancelled: approval denied."
+        }
+    }
+
+    private func startRun(task: AgentTaskTemplate, input: String) {
         errorMessage = nil
         output = ""
         statusText = "Starting \(task.name)..."
@@ -192,6 +268,38 @@ final class TaskWorkspaceViewModel: ObservableObject {
             task: task,
             activeProfile: toolPermissionProfile
         )
+    }
+
+    private func requiresApproval(for requiredProfile: AgentToolAccessLevel) -> Bool {
+        requiredProfile.rank >= AgentToolAccessLevel.localFiles.rank
+    }
+
+    private func presentApprovalPrompt(
+        for task: AgentTaskTemplate,
+        input: String,
+        requiredProfile: AgentToolAccessLevel
+    ) {
+        let prompt = TaskApprovalPrompt(
+            id: UUID(),
+            taskID: task.id,
+            taskName: task.name,
+            reason: "This task requires \(requiredProfile.title) access.",
+            expiresAt: nowProvider().addingTimeInterval(approvalTimeout)
+        )
+        pendingApproval = prompt
+        pendingApprovalContext = PendingApprovalContext(task: task, input: input)
+        errorMessage = nil
+        statusText = "Approval required before running \(task.name)."
+    }
+
+    private func clearPendingApproval() {
+        pendingApproval = nil
+        pendingApprovalContext = nil
+    }
+
+    private func approvalShouldExpire() -> Bool {
+        guard let pendingApproval else { return false }
+        return nowProvider() >= pendingApproval.expiresAt
     }
 
     private var trimmedInput: String {
@@ -340,8 +448,8 @@ struct TaskWorkspaceView: View {
                     }
                     if let selectedTaskPolicyExplanation = viewModel.selectedTaskPolicyExplanation {
                         Text("Policy: \(selectedTaskPolicyExplanation)")
-                        .font(.caption)
-                        .foregroundStyle(.secondary)
+                            .font(.caption)
+                            .foregroundStyle(.secondary)
                     }
                     Text("Current profile: \(viewModel.toolPermissionProfile.title)")
                         .font(.caption)
@@ -351,6 +459,38 @@ struct TaskWorkspaceView: View {
                             .font(.caption)
                             .foregroundStyle(.orange)
                     }
+                }
+
+                if let prompt = viewModel.pendingApproval {
+                    VStack(alignment: .leading, spacing: 8) {
+                        Text("Approval Required")
+                            .font(.headline)
+                        Text("\(prompt.taskName): \(prompt.reason)")
+                            .font(.footnote)
+                            .foregroundStyle(.secondary)
+                        Text("Choose how to proceed with this risky action.")
+                            .font(.caption)
+                            .foregroundStyle(.secondary)
+                        HStack(spacing: 10) {
+                            Button("Allow Once") {
+                                viewModel.resolvePendingApproval(.allowOnce)
+                            }
+                            .buttonStyle(.borderedProminent)
+
+                            Button("Always Allow") {
+                                viewModel.resolvePendingApproval(.alwaysAllow)
+                            }
+                            .buttonStyle(.bordered)
+
+                            Button("Deny") {
+                                viewModel.resolvePendingApproval(.deny)
+                            }
+                            .buttonStyle(.bordered)
+                        }
+                    }
+                    .padding(10)
+                    .background(Color.secondary.opacity(0.08))
+                    .clipShape(RoundedRectangle(cornerRadius: 8))
                 }
 
                 HStack(spacing: 10) {

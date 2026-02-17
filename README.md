@@ -73,6 +73,7 @@ Bzzbe is an open-source macOS app (Apple Silicon only) that installs and runs lo
 - ✅ Chat slash commands: local quick controls for presets/tuning, new conversation, and context compaction (`/help` for command list).
 - ✅ Chat model failover: runtime/model failures can now trigger automatic fallback to an alternate local model with cooldown-based retry behavior.
 - ✅ Tool permission profiles: `Read-only`/`Local files`/`Advanced` profiles with layered policy evaluation and task-level enforcement.
+- ✅ Risky-action approvals: task runs requiring risky access now require explicit `Allow Once`, `Always Allow`, or `Deny`, with local persistence for always-allow decisions.
 
 ## Troubleshooting
 

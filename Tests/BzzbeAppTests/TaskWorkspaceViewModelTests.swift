@@ -134,11 +134,158 @@ func taskWorkspaceBlocksWhenPolicyMinimumExceedsTaskRequirement() async throws {
     #expect(await client.streamCallCount == 0)
 }
 
+@MainActor
+@Test("TaskWorkspaceViewModel requires approval for risky tasks and supports allow once")
+func taskWorkspaceRequiresApprovalForRiskyTasks() async throws {
+    let client = StubTaskInferenceClient(
+        events: [
+            .started(modelIdentifier: "qwen3:8b"),
+            .token("Approved"),
+            .completed
+        ]
+    )
+    let model = InferenceModelDescriptor(
+        identifier: "qwen3:8b",
+        displayName: "Qwen 3 8B",
+        contextWindow: 32_768
+    )
+    let approvals = StubTaskApprovalRuleProvider()
+    let viewModel = TaskWorkspaceViewModel(
+        inferenceClient: client,
+        toolPermissionProvider: StubToolPermissionProfileProvider(profile: .localFiles),
+        taskApprovalRuleProvider: approvals,
+        model: model
+    )
+
+    viewModel.selectedTaskID = "organize_files_plan"
+    viewModel.userInput = "Create a plan for my Downloads folder."
+    viewModel.runSelectedTask()
+
+    #expect(viewModel.pendingApproval?.taskID == "organize_files_plan")
+    #expect(viewModel.isRunning == false)
+    #expect(await client.loadModelCallCount == 0)
+    #expect(await client.streamCallCount == 0)
+
+    viewModel.resolvePendingApproval(.allowOnce)
+
+    try await eventually {
+        !viewModel.isRunning && viewModel.runHistory.first?.status == .completed
+    }
+    #expect(viewModel.pendingApproval == nil)
+    #expect(approvals.alwaysAllowedTaskIDs.isEmpty)
+    #expect(await client.loadModelCallCount == 1)
+    #expect(await client.streamCallCount == 1)
+}
+
+@MainActor
+@Test("TaskWorkspaceViewModel persists always-allow approval decisions")
+func taskWorkspacePersistsAlwaysAllowApprovals() async throws {
+    let client = StubTaskInferenceClient(
+        events: [
+            .started(modelIdentifier: "qwen3:8b"),
+            .token("Approved"),
+            .completed
+        ]
+    )
+    let model = InferenceModelDescriptor(
+        identifier: "qwen3:8b",
+        displayName: "Qwen 3 8B",
+        contextWindow: 32_768
+    )
+    let approvals = StubTaskApprovalRuleProvider()
+    let viewModel = TaskWorkspaceViewModel(
+        inferenceClient: client,
+        toolPermissionProvider: StubToolPermissionProfileProvider(profile: .localFiles),
+        taskApprovalRuleProvider: approvals,
+        model: model
+    )
+
+    viewModel.selectedTaskID = "organize_files_plan"
+    viewModel.userInput = "Create a plan for my Downloads folder."
+    viewModel.runSelectedTask()
+    #expect(viewModel.pendingApproval != nil)
+
+    viewModel.resolvePendingApproval(.alwaysAllow)
+    try await eventually {
+        !viewModel.isRunning && viewModel.runHistory.count == 1
+    }
+
+    #expect(approvals.alwaysAllowedTaskIDs.contains("organize_files_plan"))
+    #expect(await client.streamCallCount == 1)
+
+    viewModel.userInput = "Create another plan."
+    viewModel.runSelectedTask()
+
+    try await eventually {
+        !viewModel.isRunning && viewModel.runHistory.count == 2
+    }
+
+    #expect(viewModel.pendingApproval == nil)
+    #expect(await client.streamCallCount == 2)
+}
+
+@MainActor
+@Test("TaskWorkspaceViewModel approval requests time out")
+func taskWorkspaceApprovalTimesOut() async throws {
+    let client = StubTaskInferenceClient(
+        events: [
+            .started(modelIdentifier: "qwen3:8b"),
+            .token("Should not run"),
+            .completed
+        ]
+    )
+    let model = InferenceModelDescriptor(
+        identifier: "qwen3:8b",
+        displayName: "Qwen 3 8B",
+        contextWindow: 32_768
+    )
+    let approvals = StubTaskApprovalRuleProvider()
+    var now = Date(timeIntervalSince1970: 1_000)
+    let viewModel = TaskWorkspaceViewModel(
+        inferenceClient: client,
+        toolPermissionProvider: StubToolPermissionProfileProvider(profile: .localFiles),
+        taskApprovalRuleProvider: approvals,
+        nowProvider: { now },
+        approvalTimeout: 1,
+        model: model
+    )
+
+    viewModel.selectedTaskID = "organize_files_plan"
+    viewModel.userInput = "Create a plan for my Downloads folder."
+    viewModel.runSelectedTask()
+
+    #expect(viewModel.pendingApproval != nil)
+    now = now.addingTimeInterval(2)
+    viewModel.resolvePendingApproval(.allowOnce)
+
+    #expect(viewModel.pendingApproval == nil)
+    #expect(viewModel.errorMessage?.contains("timed out") == true)
+    #expect(viewModel.runHistory.isEmpty)
+    #expect(await client.loadModelCallCount == 0)
+    #expect(await client.streamCallCount == 0)
+}
+
 private struct StubToolPermissionProfileProvider: ToolPermissionProfileProviding {
     let profile: AgentToolAccessLevel
 
     func currentProfile() -> AgentToolAccessLevel {
         profile
+    }
+}
+
+private final class StubTaskApprovalRuleProvider: TaskApprovalRuleProviding {
+    private(set) var alwaysAllowedTaskIDs: Set<String>
+
+    init(alwaysAllowedTaskIDs: Set<String> = []) {
+        self.alwaysAllowedTaskIDs = alwaysAllowedTaskIDs
+    }
+
+    func isAlwaysAllowed(taskID: String) -> Bool {
+        alwaysAllowedTaskIDs.contains(taskID)
+    }
+
+    func allowAlways(taskID: String) {
+        alwaysAllowedTaskIDs.insert(taskID)
     }
 }
 

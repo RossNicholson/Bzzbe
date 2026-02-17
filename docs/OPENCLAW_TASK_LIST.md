@@ -32,7 +32,7 @@ This tracks the OpenClaw-inspired features Bzzbe should add, in implementation o
 
 ## Wave 2 (safe capability expansion)
 
-4. `[ ]` Risky-action approval workflow
+4. `[x]` Risky-action approval workflow
    - Add explicit approval prompts for high-risk actions.
    - Add “allow once / always allow / deny” outcomes.
    - Persist per-user allowlist rules locally.
